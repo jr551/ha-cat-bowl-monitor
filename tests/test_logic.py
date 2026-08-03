@@ -19,6 +19,7 @@ SPEC.loader.exec_module(LOGIC)
 AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
 apply_confirmation = LOGIC.apply_confirmation
+is_feeding_completion = LOGIC.is_feeding_completion
 parse_consumption_response = LOGIC.parse_consumption_response
 parse_provider_response = LOGIC.parse_provider_response
 
@@ -94,6 +95,13 @@ def test_parse_consumption_comparison() -> None:
     assert result.dry_eaten_percent == 70
     assert result.wet_eaten_percent is None
     assert result.confidence == 0.82
+
+
+def test_only_real_feeding_completion_resets_baseline() -> None:
+    assert is_feeding_completion("on", "off")
+    assert not is_feeding_completion("off", "on")
+    assert not is_feeding_completion("unavailable", "off")
+    assert not is_feeding_completion(None, "off")
 
 
 def test_two_confident_empty_samples_are_required() -> None:

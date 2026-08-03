@@ -52,6 +52,11 @@ class Confirmation:
     changed: bool
 
 
+def is_feeding_completion(old_state: str | None, new_state: str | None) -> bool:
+    """Return whether a feeder-active sensor completed a real dispense."""
+    return old_state == "on" and new_state == "off"
+
+
 def _reading(result: dict[str, Any], prefix: str) -> BowlReading:
     level = str(result[f"{prefix}_level"]).strip().lower()
     visible = result[f"{prefix}_visible"]

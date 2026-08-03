@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_NOTIFICATIONS,
     DEFAULT_PET_NAME,
     DOMAIN,
+    EVENT_BASELINE_RESET,
     EVENT_BECAME_EMPTY,
     EVENT_CHECKED,
     EVENT_FEED_REQUESTED,
@@ -70,6 +72,7 @@ from .logic import (
     BowlReading,
     Consumption,
     apply_confirmation,
+    is_feeding_completion,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,6 +102,8 @@ class BowlRuntime:
         self._remove_schedule: list[Callable[[], None]] = []
         self._check_lock = asyncio.Lock()
         self._cycle_lock = asyncio.Lock()
+        self._feed_baseline_task: asyncio.Task[None] | None = None
+        self._internal_feed_requests = 0
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.latest_images: dict[str, bytes | None] = {
             "latest": None,
@@ -124,9 +129,13 @@ class BowlRuntime:
         self.last_feed_result = "not_requested"
         self.last_family_delivery = ""
         self.baseline_at: datetime | None = None
+        self.baseline_reason = ""
+        self.last_feeder_completion_at: datetime | None = None
+        self.pending_feed_baseline_at: datetime | None = None
         self.consumption_from_at: datetime | None = None
         self.consumption_to_at: datetime | None = None
         self.consumption: Consumption | None = None
+        self.consumption_baseline_reason = ""
         self._user_key = (
             "cat-bowl-" + hashlib.sha256(entry.entry_id.encode()).hexdigest()[:16]
         )
@@ -202,6 +211,14 @@ class BowlRuntime:
     async def async_start(self) -> None:
         """Restore state, register schedules, and take one safe sample."""
         await self._async_restore()
+        if self.feeding_sensor:
+            self._remove_schedule.append(
+                async_track_state_change_event(
+                    self.hass, [self.feeding_sensor], self._feeding_sensor_changed
+                )
+            )
+            if self.pending_feed_baseline_at is not None:
+                self._schedule_feed_baseline(self.pending_feed_baseline_at)
         for scheduled_time in self.schedule_times:
             self._remove_schedule.append(
                 async_track_time_change(
@@ -241,6 +258,90 @@ class BowlRuntime:
         for remove in self._remove_schedule:
             remove()
         self._remove_schedule.clear()
+        if self._feed_baseline_task is not None:
+            self._feed_baseline_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._feed_baseline_task
+            self._feed_baseline_task = None
+
+    @callback
+    def _feeding_sensor_changed(self, event: Event) -> None:
+        """Reset the comparison whenever the feeder completes a dispense."""
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        if not is_feeding_completion(
+            old_state.state if old_state is not None else None,
+            new_state.state if new_state is not None else None,
+        ):
+            return
+        completed_at = dt_util.utcnow()
+        self.last_feeder_completion_at = completed_at
+        if self._internal_feed_requests:
+            return
+        self._schedule_feed_baseline(completed_at)
+
+    @callback
+    def _schedule_feed_baseline(self, completed_at: datetime) -> None:
+        if self._feed_baseline_task is not None:
+            self._feed_baseline_task.cancel()
+        self._feed_baseline_task = self.hass.async_create_background_task(
+            self._async_reset_baseline_after_feed(completed_at),
+            name=f"{DOMAIN}_{self.entry.entry_id}_post_feed_baseline",
+            eager_start=True,
+        )
+
+    async def _async_reset_baseline_after_feed(self, completed_at: datetime) -> None:
+        """Invalidate polluted consumption and capture a post-feed reference."""
+        self.pending_feed_baseline_at = completed_at
+        self.baseline_reason = "feeder_completion_pending"
+        self.baseline_at = None
+        self.consumption = None
+        self.consumption_from_at = None
+        self.consumption_to_at = None
+        self.consumption_baseline_reason = ""
+        self.latest_images["baseline"] = None
+        self.image_updated["baseline"] = None
+        await self.hass.async_add_executor_job(self._remove_image, "baseline")
+        await self._async_save()
+        self._notify()
+        self.hass.bus.async_fire(
+            EVENT_BASELINE_RESET,
+            self._baseline_payload("pending"),
+        )
+
+        elapsed = max(0.0, (dt_util.utcnow() - completed_at).total_seconds())
+        await asyncio.sleep(max(0.0, POST_FEED_SETTLE_SECONDS - elapsed))
+        if self.pending_feed_baseline_at != completed_at:
+            return
+        if self._cycle_lock.locked():
+            return
+
+        async with self._check_lock:
+            if self._cycle_lock.locked():
+                return
+            try:
+                jpeg, assessment = await self._async_capture_assess("latest")
+                await self._async_apply_assessment(assessment)
+            except (
+                HomeAssistantError,
+                ProviderError,
+                RuntimeError,
+                TimeoutError,
+            ) as err:
+                self.baseline_reason = "feeder_completion_capture_failed"
+                await self._async_record_failure(err)
+                self.hass.bus.async_fire(
+                    EVENT_BASELINE_RESET,
+                    self._baseline_payload("failed"),
+                )
+                return
+            await self._async_set_baseline(jpeg, "feeder_completion")
+            await self._async_save()
+            self._notify()
+            self.hass.bus.async_fire(
+                EVENT_BASELINE_RESET,
+                self._baseline_payload("completed"),
+            )
 
     def _scheduled_datetimes(self, moment: datetime) -> tuple[datetime, ...]:
         return tuple(
@@ -384,11 +485,12 @@ class BowlRuntime:
                         self._write_image, "after", before_jpeg
                     )
 
-                self.latest_images["baseline"] = after_jpeg
-                self.baseline_at = dt_util.utcnow()
-                await self.hass.async_add_executor_job(
-                    self._write_image, "baseline", after_jpeg
+                baseline_reason = (
+                    "scheduled_cycle_after_feed"
+                    if any_requested
+                    else "scheduled_cycle"
                 )
+                await self._async_set_baseline(after_jpeg, baseline_reason)
                 self.last_feed_result = f"right={right_result}; left={left_result}"
                 feed_failed = (
                     right_needed and not right_result.startswith("sent")
@@ -520,6 +622,7 @@ class BowlRuntime:
             self.consumption = None
             self.consumption_from_at = None
             self.consumption_to_at = None
+            self.consumption_baseline_reason = ""
             return
         try:
             self.consumption, self.last_model = await async_compare_consumption(
@@ -532,9 +635,20 @@ class BowlRuntime:
             )
             self.consumption_from_at = self.baseline_at
             self.consumption_to_at = dt_util.utcnow()
+            self.consumption_baseline_reason = self.baseline_reason
         except ProviderError as err:
             _LOGGER.warning("Cat bowl consumption comparison failed: %s", err)
             self.consumption = None
+            self.consumption_baseline_reason = ""
+
+    async def _async_set_baseline(self, jpeg: bytes, reason: str) -> None:
+        """Persist a bounded reference image for the next comparison."""
+        self.latest_images["baseline"] = jpeg
+        self.image_updated["baseline"] = dt_util.utcnow()
+        self.baseline_at = self.image_updated["baseline"]
+        self.baseline_reason = reason
+        self.pending_feed_baseline_at = None
+        await self.hass.async_add_executor_job(self._write_image, "baseline", jpeg)
 
     def _confirmed_empty(self, first: BowlReading, second: BowlReading) -> bool:
         return all(
@@ -587,6 +701,7 @@ class BowlRuntime:
             if self.feeding_sensor
             else None
         )
+        self._internal_feed_requests += 1
         try:
             # Fire an event before the call; the event plus persisted cycle key
             # provide an audit trail while retries remain forbidden.
@@ -620,6 +735,7 @@ class BowlRuntime:
             _LOGGER.warning("Cat feeder %s action failed: %s", side, err)
             return "action_failed"
         finally:
+            self._internal_feed_requests = max(0, self._internal_feed_requests - 1)
             if remove is not None:
                 remove()
 
@@ -686,9 +802,14 @@ class BowlRuntime:
             )
             dry_eaten = _percent_text(self.consumption.dry_eaten_percent)
             wet_eaten = _percent_text(self.consumption.wet_eaten_percent)
+            reference = (
+                "last feeder dispense"
+                if self.consumption_baseline_reason == "feeder_completion"
+                else "previous sample"
+            )
             eaten = (
-                f"Since the previous sample (~{elapsed} h): dry {dry_eaten} "
-                f"eaten; wet {wet_eaten} eaten."
+                f"Since the {reference} (~{elapsed} h): dry {dry_eaten} eaten; "
+                f"wet {wet_eaten} eaten."
             )
         else:
             eaten = "Consumption baseline created; comparison starts next check."
@@ -729,6 +850,15 @@ class BowlRuntime:
             "family_delivery": self.last_family_delivery,
         }
 
+    def _baseline_payload(self, status: str) -> dict[str, Any]:
+        return {
+            "status": status,
+            "feeding_sensor": self.feeding_sensor,
+            "feed_completed_at": _iso(self.last_feeder_completion_at),
+            "baseline_at": _iso(self.baseline_at),
+            "baseline_reason": self.baseline_reason,
+        }
+
     def _event_payload(self, bowl_name: str | None = None) -> dict[str, Any]:
         return {
             "camera_entity": self.camera_entity,
@@ -767,11 +897,21 @@ class BowlRuntime:
             self.last_checked_at = _parse_datetime(loaded.get("last_checked_at"))
             self.last_cycle_at = _parse_datetime(loaded.get("last_cycle_at"))
             self.baseline_at = _parse_datetime(loaded.get("baseline_at"))
+            self.baseline_reason = str(loaded.get("baseline_reason", ""))[:80]
+            self.last_feeder_completion_at = _parse_datetime(
+                loaded.get("last_feeder_completion_at")
+            )
+            self.pending_feed_baseline_at = _parse_datetime(
+                loaded.get("pending_feed_baseline_at")
+            )
             self.consumption_from_at = _parse_datetime(
                 loaded.get("consumption_from_at")
             )
             self.consumption_to_at = _parse_datetime(loaded.get("consumption_to_at"))
             consumption = loaded.get("consumption")
+            self.consumption_baseline_reason = str(
+                loaded.get("consumption_baseline_reason", "")
+            )[:80]
             if isinstance(consumption, dict):
                 self.consumption = Consumption(
                     consumption.get("dry_eaten_percent"),
@@ -809,8 +949,12 @@ class BowlRuntime:
                 "last_feed_result": self.last_feed_result,
                 "last_family_delivery": self.last_family_delivery,
                 "baseline_at": _iso(self.baseline_at),
+                "baseline_reason": self.baseline_reason,
+                "last_feeder_completion_at": _iso(self.last_feeder_completion_at),
+                "pending_feed_baseline_at": _iso(self.pending_feed_baseline_at),
                 "consumption_from_at": _iso(self.consumption_from_at),
                 "consumption_to_at": _iso(self.consumption_to_at),
+                "consumption_baseline_reason": self.consumption_baseline_reason,
                 "consumption": (
                     {
                         "dry_eaten_percent": self.consumption.dry_eaten_percent,
@@ -833,6 +977,10 @@ class BowlRuntime:
         temporary = path.with_suffix(".tmp")
         temporary.write_bytes(content)
         os.replace(temporary, path)
+
+    def _remove_image(self, slot: str) -> None:
+        with suppress(FileNotFoundError):
+            self._image_path(slot).unlink()
 
 
 def _iso(value: datetime | None) -> str | None:

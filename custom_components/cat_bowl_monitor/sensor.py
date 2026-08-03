@@ -148,6 +148,18 @@ class ConsumptionSensor(BowlEntity, SensorEntity):
                 if self.runtime.consumption_to_at
                 else None
             ),
+            "baseline_reason": self.runtime.baseline_reason or None,
+            "comparison_reference": (
+                self.runtime.consumption_baseline_reason or None
+            ),
+            "last_feeder_completion_at": (
+                self.runtime.last_feeder_completion_at.isoformat()
+                if self.runtime.last_feeder_completion_at
+                else None
+            ),
+            "baseline_reset_pending": (
+                self.runtime.pending_feed_baseline_at is not None
+            ),
         }
 
 
