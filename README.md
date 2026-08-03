@@ -17,7 +17,8 @@ actions.
 ## Features
 
 - Independent dry- and wet-bowl status, fill estimate, and empty entities.
-- AI estimate of the percentage eaten since the previous scheduled reference.
+- AI estimate of the percentage eaten since the most recent trustworthy
+  reference.
 - Configurable daily check times, camera light, pet name, bowl layout, and
   confidence threshold.
 - Direct OpenAI-compatible API settings, or credential reuse from the
@@ -25,6 +26,9 @@ actions.
 - Optional primary and secondary feeder actions using a Home Assistant scene,
   script, or button.
 - Optional feeder-active binary sensor and `domain.service` notification action.
+- Automatic baseline reset after every observed scheduled or manual dispense,
+  followed by a post-feed image after the food has settled. This prevents an
+  external feeder schedule from making consumption look artificially low.
 - Bounded latest, before, after, and baseline images instead of an archive.
 
 ## Guarded feeding behaviour
@@ -39,6 +43,9 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
 - The cycle key is saved before an actuator call, so a restart cannot repeat
   that scheduled feed.
 - Failed or unverified feeds are never retried automatically.
+- A genuine `on` to `off` feeder-sensor transition immediately invalidates the
+  old consumption comparison. It never actuates a feeder or sends a duplicate
+  notification; after 90 seconds it records a new post-feed baseline.
 - A manual **Check now** only takes a sample and can never dispense food.
 - Unknown, hidden, dark, or low-confidence bowls fail closed.
 
@@ -89,6 +96,7 @@ It emits these Home Assistant events for advanced automations:
 - `cat_bowl_monitor_recovered`
 - `cat_bowl_monitor_scheduled_cycle`
 - `cat_bowl_monitor_feed_requested`
+- `cat_bowl_monitor_baseline_reset`
 
 ## Image handling and privacy
 
