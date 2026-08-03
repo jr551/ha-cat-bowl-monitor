@@ -1,0 +1,65 @@
+{
+  "title": "Cat Bowl Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Cat Bowl Monitor",
+        "description": "Uses an OpenAI-compatible vision provider to check two food bowls on a schedule. Images are sent to the configured provider. Only bounded latest/before/after image slots are retained. Leave the direct-provider fields blank to reuse UBox Camera.",
+        "data": {
+          "camera_entity": "Bowl-facing camera",
+          "light_entity": "Camera light (optional)",
+          "confirmation_samples": "Consecutive results required",
+          "confidence_threshold": "Minimum AI confidence",
+          "notifications": "Send scheduled summaries",
+          "notification_service": "Notification service, for example notify.mobile_app_phone",
+          "right_feed_entity": "Primary feeder scene, script, or button (optional)",
+          "left_feed_entity": "Secondary feeder scene, script, or button (optional)",
+          "feeding_sensor": "Feeder active binary sensor (optional)",
+          "morning_time": "First daily check (HH:MM)",
+          "afternoon_time": "Second daily check (HH:MM)",
+          "pet_name": "Pet name",
+          "bowl_description": "Bowl locations and appearance",
+          "ai_api_key": "Direct provider API key (optional)",
+          "ai_base_url": "Direct provider HTTPS base URL (optional)",
+          "ai_model": "Direct provider model (optional)"
+        }
+      }
+    },
+    "error": {
+      "camera_not_found": "Select a camera entity that currently exists.",
+      "light_not_found": "Select a light entity that currently exists.",
+      "feeding_sensor_not_found": "Select a binary sensor that currently exists.",
+      "notification_service_not_found": "Enter an available domain.service notification action.",
+      "provider_not_configured": "Enter a complete direct provider configuration or configure a working vision provider in UBox Camera.",
+      "action_not_found": "Select an existing scene, script, or button entity."
+    },
+    "abort": {
+      "already_configured": "This camera already has a Cat Bowl Monitor."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cat Bowl Monitor options",
+        "data": {
+          "camera_entity": "Bowl-facing camera",
+          "light_entity": "Camera light (optional)",
+          "confirmation_samples": "Consecutive results required",
+          "confidence_threshold": "Minimum AI confidence",
+          "notifications": "Send scheduled summaries",
+          "notification_service": "Notification service, for example notify.mobile_app_phone",
+          "right_feed_entity": "Primary feeder scene, script, or button (optional)",
+          "left_feed_entity": "Secondary feeder scene, script, or button (optional)",
+          "feeding_sensor": "Feeder active binary sensor (optional)",
+          "morning_time": "First daily check (HH:MM)",
+          "afternoon_time": "Second daily check (HH:MM)",
+          "pet_name": "Pet name",
+          "bowl_description": "Bowl locations and appearance",
+          "ai_api_key": "Direct provider API key (optional)",
+          "ai_base_url": "Direct provider HTTPS base URL (optional)",
+          "ai_model": "Direct provider model (optional)"
+        }
+      }
+    }
+  }
+}

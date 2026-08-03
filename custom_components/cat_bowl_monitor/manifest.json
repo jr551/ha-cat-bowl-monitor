@@ -1,0 +1,12 @@
+{
+  "domain": "cat_bowl_monitor",
+  "name": "Cat Bowl Monitor",
+  "codeowners": ["@jr551"],
+  "config_flow": true,
+  "documentation": "https://github.com/jr551/ha-cat-bowl-monitor",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jr551/ha-cat-bowl-monitor/issues",
+  "requirements": ["Pillow==12.2.0"],
+  "version": "0.1.0"
+}
