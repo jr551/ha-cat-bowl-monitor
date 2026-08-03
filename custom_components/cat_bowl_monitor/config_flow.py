@@ -120,11 +120,11 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MORNING_TIME,
                 default=defaults.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME),
-            ): vol.Match(r"^(?:[01]\d|2[0-3]):[0-5]\d$"),
+            ): selector.TimeSelector(),
             vol.Required(
                 CONF_AFTERNOON_TIME,
                 default=defaults.get(CONF_AFTERNOON_TIME, DEFAULT_AFTERNOON_TIME),
-            ): vol.Match(r"^(?:[01]\d|2[0-3]):[0-5]\d$"),
+            ): selector.TimeSelector(),
             vol.Required(
                 CONF_PET_NAME,
                 default=defaults.get(CONF_PET_NAME, DEFAULT_PET_NAME),
