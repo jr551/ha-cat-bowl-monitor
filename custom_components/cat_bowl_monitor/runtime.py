@@ -44,6 +44,7 @@ from .const import (
     CONF_MORNING_TIME,
     CONF_NOTIFICATION_SERVICE,
     CONF_NOTIFICATIONS,
+    CONF_NOTIFY_NO_ACTION,
     CONF_PET_NAME,
     CONF_RIGHT_FEED_ENTITY,
     CONFIRMATION_DELAY_SECONDS,
@@ -53,6 +54,7 @@ from .const import (
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
     DEFAULT_NOTIFICATIONS,
+    DEFAULT_NOTIFY_NO_ACTION,
     DEFAULT_PET_NAME,
     DOMAIN,
     EVENT_BASELINE_RESET,
@@ -73,6 +75,7 @@ from .logic import (
     Consumption,
     apply_confirmation,
     is_feeding_completion,
+    should_notify_cycle,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -160,6 +163,10 @@ class BowlRuntime:
     @property
     def notifications_enabled(self) -> bool:
         return bool(self.options.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS))
+
+    @property
+    def notify_no_action(self) -> bool:
+        return bool(self.options.get(CONF_NOTIFY_NO_ACTION, DEFAULT_NOTIFY_NO_ACTION))
 
     @property
     def right_feed_entity(self) -> str:
@@ -504,7 +511,15 @@ class BowlRuntime:
                     second,
                     after,
                 )
-                await self._async_notify_family(self.last_cycle_message)
+                if should_notify_cycle(
+                    notifications_enabled=self.notifications_enabled,
+                    notify_no_action=self.notify_no_action,
+                    right_needed=right_needed,
+                    left_needed=left_needed,
+                ):
+                    await self._async_notify_family(self.last_cycle_message)
+                else:
+                    self.last_family_delivery = "suppressed_no_action"
                 payload = self._cycle_payload()
                 self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, payload)
                 if self.last_cycle_status == "blocked":

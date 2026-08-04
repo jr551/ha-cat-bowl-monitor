@@ -57,6 +57,19 @@ def is_feeding_completion(old_state: str | None, new_state: str | None) -> bool:
     return old_state == "on" and new_state == "off"
 
 
+def should_notify_cycle(
+    *,
+    notifications_enabled: bool,
+    notify_no_action: bool,
+    right_needed: bool,
+    left_needed: bool,
+) -> bool:
+    """Keep routine no-action cycles silent unless explicitly requested."""
+    return notifications_enabled and (
+        notify_no_action or right_needed or left_needed
+    )
+
+
 def _reading(result: dict[str, Any], prefix: str) -> BowlReading:
     level = str(result[f"{prefix}_level"]).strip().lower()
     visible = result[f"{prefix}_visible"]

@@ -20,6 +20,7 @@ AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
 apply_confirmation = LOGIC.apply_confirmation
 is_feeding_completion = LOGIC.is_feeding_completion
+should_notify_cycle = LOGIC.should_notify_cycle
 parse_consumption_response = LOGIC.parse_consumption_response
 parse_provider_response = LOGIC.parse_provider_response
 
@@ -102,6 +103,33 @@ def test_only_real_feeding_completion_resets_baseline() -> None:
     assert not is_feeding_completion("off", "on")
     assert not is_feeding_completion("unavailable", "off")
     assert not is_feeding_completion(None, "off")
+
+
+def test_routine_no_action_cycle_is_silent_by_default() -> None:
+    assert not should_notify_cycle(
+        notifications_enabled=True,
+        notify_no_action=False,
+        right_needed=False,
+        left_needed=False,
+    )
+    assert should_notify_cycle(
+        notifications_enabled=True,
+        notify_no_action=False,
+        right_needed=True,
+        left_needed=False,
+    )
+    assert should_notify_cycle(
+        notifications_enabled=True,
+        notify_no_action=True,
+        right_needed=False,
+        left_needed=False,
+    )
+    assert not should_notify_cycle(
+        notifications_enabled=False,
+        notify_no_action=True,
+        right_needed=True,
+        left_needed=True,
+    )
 
 
 def test_two_confident_empty_samples_are_required() -> None:
