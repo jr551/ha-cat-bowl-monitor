@@ -24,6 +24,7 @@ from .const import (
     CONF_MORNING_TIME,
     CONF_NOTIFICATION_SERVICE,
     CONF_NOTIFICATIONS,
+    CONF_NOTIFY_NO_ACTION,
     CONF_PET_NAME,
     CONF_RIGHT_FEED_ENTITY,
     DEFAULT_AFTERNOON_TIME,
@@ -32,6 +33,7 @@ from .const import (
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
     DEFAULT_NOTIFICATIONS,
+    DEFAULT_NOTIFY_NO_ACTION,
     DEFAULT_PET_NAME,
     DOMAIN,
     MAX_CONFIRMATION_SAMPLES,
@@ -116,6 +118,13 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_NOTIFICATIONS,
                 default=defaults.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS),
+            ): bool,
+            vol.Required(
+                CONF_NOTIFY_NO_ACTION,
+                default=defaults.get(
+                    CONF_NOTIFY_NO_ACTION,
+                    DEFAULT_NOTIFY_NO_ACTION,
+                ),
             ): bool,
             vol.Required(
                 CONF_MORNING_TIME,

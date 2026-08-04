@@ -26,6 +26,9 @@ actions.
 - Optional primary and secondary feeder actions using a Home Assistant scene,
   script, or button.
 - Optional feeder-active binary sensor and `domain.service` notification action.
+- Low-noise notifications by default: routine no-action checks stay silent,
+  while feed actions, blocked feeds, and cycle failures are announced. An
+  option can restore summaries for every scheduled check.
 - Automatic baseline reset after every observed scheduled or manual dispense,
   followed by a post-feed image after the food has settled. This prevents an
   external feeder schedule from making consumption look artificially low.
