@@ -51,8 +51,8 @@ from .const import (
     CONFIRMATION_DELAY_SECONDS,
     DEFAULT_AFTERNOON_TIME,
     DEFAULT_BOWL_DESCRIPTION,
-    DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_CHECK_INTERVAL_HOURS,
+    DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
     DEFAULT_NOTIFICATIONS,
@@ -67,8 +67,8 @@ from .const import (
     EVENT_SCHEDULED_CYCLE,
     ILLUMINATION_SETTLE_SECONDS,
     MAX_CONSECUTIVE_FAILURES_BEFORE_UNAVAILABLE,
-    POST_FEED_SETTLE_SECONDS,
     POST_FEED_BASELINE_RETRY_SECONDS,
+    POST_FEED_SETTLE_SECONDS,
     SCHEDULE_CATCHUP_MINUTES,
     STORE_VERSION,
 )
@@ -77,8 +77,8 @@ from .logic import (
     BowlReading,
     Consumption,
     apply_confirmation,
-    is_feeding_completion,
     interval_schedule,
+    is_feeding_completion,
     should_notify_cycle,
 )
 
