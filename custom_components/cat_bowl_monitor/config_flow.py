@@ -10,12 +10,14 @@ from homeassistant.helpers import selector
 
 from .ai import ProviderError, provider_settings_from_config
 from .const import (
+    CHECK_INTERVAL_OPTIONS,
     CONF_AFTERNOON_TIME,
     CONF_AI_API_KEY,
     CONF_AI_BASE_URL,
     CONF_AI_MODEL,
     CONF_BOWL_DESCRIPTION,
     CONF_CAMERA_ENTITY,
+    CONF_CHECK_INTERVAL_HOURS,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_CONFIRMATION_SAMPLES,
     CONF_FEEDING_SENSOR,
@@ -30,6 +32,7 @@ from .const import (
     DEFAULT_AFTERNOON_TIME,
     DEFAULT_BOWL_DESCRIPTION,
     DEFAULT_CONFIDENCE_THRESHOLD,
+    DEFAULT_CHECK_INTERVAL_HOURS,
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
     DEFAULT_NOTIFICATIONS,
@@ -64,7 +67,11 @@ def _optional_entity(
     domains: str | list[str],
 ) -> None:
     current = str(defaults.get(key, "")).strip()
-    marker = vol.Optional(key, default=current) if current else vol.Optional(key)
+    marker = (
+        vol.Optional(key, description={"suggested_value": current})
+        if current
+        else vol.Optional(key)
+    )
     fields[marker] = selector.EntitySelector(
         selector.EntitySelectorConfig(domain=domains)
     )
@@ -77,7 +84,11 @@ def _optional_text(
     text_type: str = "text",
 ) -> None:
     current = str(defaults.get(key, "")).strip()
-    marker = vol.Optional(key, default=current) if current else vol.Optional(key)
+    marker = (
+        vol.Optional(key, description={"suggested_value": current})
+        if current
+        else vol.Optional(key)
+    )
     fields[marker] = selector.selector({"text": {"type": text_type}})
 
 
@@ -126,6 +137,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                     DEFAULT_NOTIFY_NO_ACTION,
                 ),
             ): bool,
+            vol.Required(
+                CONF_CHECK_INTERVAL_HOURS,
+                default=defaults.get(
+                    CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS
+                ),
+            ): vol.In(CHECK_INTERVAL_OPTIONS),
             vol.Required(
                 CONF_MORNING_TIME,
                 default=defaults.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME),

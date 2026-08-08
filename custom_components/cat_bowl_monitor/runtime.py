@@ -36,6 +36,7 @@ from .const import (
     CONF_AFTERNOON_TIME,
     CONF_BOWL_DESCRIPTION,
     CONF_CAMERA_ENTITY,
+    CONF_CHECK_INTERVAL_HOURS,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_CONFIRMATION_SAMPLES,
     CONF_FEEDING_SENSOR,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_AFTERNOON_TIME,
     DEFAULT_BOWL_DESCRIPTION,
     DEFAULT_CONFIDENCE_THRESHOLD,
+    DEFAULT_CHECK_INTERVAL_HOURS,
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
     DEFAULT_NOTIFICATIONS,
@@ -76,6 +78,7 @@ from .logic import (
     Consumption,
     apply_confirmation,
     is_feeding_completion,
+    interval_schedule,
     should_notify_cycle,
 )
 
@@ -200,6 +203,14 @@ class BowlRuntime:
 
     @property
     def schedule_times(self) -> tuple[time, ...]:
+        interval = int(
+            self.options.get(CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS)
+        )
+        if interval:
+            anchor = _parse_time(
+                self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME)
+            )
+            return interval_schedule(anchor, interval)
         values = (
             self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME),
             self.options.get(CONF_AFTERNOON_TIME, DEFAULT_AFTERNOON_TIME),
@@ -820,18 +831,24 @@ class BowlRuntime:
             )
             if feed_failed:
                 feed = (
-                    "Auto feed BLOCKED — a required Tuya feed action was "
+                    "Action: no food dispensed — a required action was "
                     f"not safely completed (right={right_result}, left={left_result})."
                 )
             else:
                 actions = []
                 if right_needed:
-                    actions.append(f"right feeder ({right_result})")
+                    actions.append(f"1R dry portion ({right_result})")
                 if left_needed:
                     actions.append(f"left feeder ({left_result})")
-                feed = "Auto feed ON — " + ", ".join(actions) + "."
+                feed = "Action: dispensed " + ", ".join(actions) + "."
         else:
-            feed = "Auto feed OFF — dry bowl was not confirmed empty."
+            if not before.dry.visible or before.dry.level == "unknown":
+                feed = "Action: no food dispensed — primary dry zone was unclear."
+            else:
+                feed = (
+                    "Action: no food dispensed — primary dry food remains "
+                    f"({before.dry.level}, {_percent_text(before.dry.fill_percent)} full)."
+                )
 
         if self.consumption and self.consumption_from_at and self.consumption_to_at:
             elapsed = max(
@@ -850,23 +867,22 @@ class BowlRuntime:
                 else "previous sample"
             )
             eaten = (
-                f"Since the {reference} (~{elapsed} h): dry {dry_eaten} eaten; "
-                f"wet {wet_eaten} eaten."
+                f"Food activity since the {reference} (~{elapsed} h): "
+                f"primary dry {dry_eaten} used; secondary {wet_eaten} used."
             )
         else:
-            eaten = "Consumption baseline created; comparison starts next check."
+            eaten = "Food activity: baseline ready; change starts next check."
 
         return (
-            f"{self.pet_name} bowl AI check {local_time:%H:%M} 🍽️\n"
+            f"🐾 {self.pet_name} food check — {local_time:%H:%M}\n"
             f"{feed}\n"
-            f"Before — dry: {before.dry.level} "
-            f"({_percent_text(before.dry.fill_percent)} full); wet: "
-            f"{before.wet.level} "
-            f"({_percent_text(before.wet.fill_percent)} full).\n"
-            f"After — dry: {after.dry.level} "
-            f"({_percent_text(after.dry.fill_percent)} full); wet: "
-            f"{after.wet.level} "
-            f"({_percent_text(after.wet.fill_percent)} full).\n"
+            f"Seen: primary dry {before.dry.level} "
+            f"({_percent_text(before.dry.fill_percent)}, {before.dry.confidence:.0%} sure); "
+            f"secondary {before.wet.level} "
+            f"({_percent_text(before.wet.fill_percent)}, {before.wet.confidence:.0%} sure).\n"
+            f"Result: primary dry {after.dry.level} "
+            f"({_percent_text(after.dry.fill_percent)}); secondary {after.wet.level} "
+            f"({_percent_text(after.wet.fill_percent)}).\n"
             f"{eaten}"
         )
 

@@ -15,6 +15,7 @@ CONF_LEFT_FEED_ENTITY = "left_feed_entity"
 CONF_FEEDING_SENSOR = "feeding_sensor"
 CONF_MORNING_TIME = "morning_time"
 CONF_AFTERNOON_TIME = "afternoon_time"
+CONF_CHECK_INTERVAL_HOURS = "check_interval_hours"
 CONF_PET_NAME = "pet_name"
 CONF_BOWL_DESCRIPTION = "bowl_description"
 CONF_AI_API_KEY = "ai_api_key"
@@ -27,14 +28,19 @@ DEFAULT_NOTIFICATIONS = False
 DEFAULT_NOTIFY_NO_ACTION = False
 DEFAULT_MORNING_TIME = "05:00"
 DEFAULT_AFTERNOON_TIME = "16:00"
+DEFAULT_CHECK_INTERVAL_HOURS = 0
 DEFAULT_PET_NAME = "Cat"
 DEFAULT_BOWL_DESCRIPTION = (
-    "DRY is the main dry-food bowl. WET is the separate secondary wet-food "
-    "bowl. Judge only food inside those two bowls."
+    "PRIMARY DRY is the rectangular metal tray in the upper-left/centre "
+    "(approximately x=5-55%, y=15-75%); it alone controls feeding. SECONDARY "
+    "is any clearly visible separate wet-food, treat, or temporary bowl in the "
+    "right/lower-right area (approximately x=60-100%, y=45-100%). Report "
+    "SECONDARY as unknown when no separate bowl is clearly visible."
 )
 
 MIN_CONFIRMATION_SAMPLES = 2
 MAX_CONFIRMATION_SAMPLES = 6
+CHECK_INTERVAL_OPTIONS = (0, 3, 4, 6, 8, 12, 24)
 CONFIRMATION_DELAY_SECONDS = 30
 POST_FEED_SETTLE_SECONDS = 90
 POST_FEED_BASELINE_RETRY_SECONDS = (60, 300, 900)

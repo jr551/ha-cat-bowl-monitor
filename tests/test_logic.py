@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sys
+from datetime import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
 apply_confirmation = LOGIC.apply_confirmation
 is_feeding_completion = LOGIC.is_feeding_completion
+interval_schedule = LOGIC.interval_schedule
 should_notify_cycle = LOGIC.should_notify_cycle
 parse_consumption_response = LOGIC.parse_consumption_response
 parse_provider_response = LOGIC.parse_provider_response
@@ -138,6 +140,17 @@ def test_routine_no_action_cycle_is_silent_by_default() -> None:
         notify_no_action=False,
         right_needed=False,
         left_needed=False,
+    )
+
+
+def test_four_hour_schedule_wraps_from_0615() -> None:
+    assert interval_schedule(time(6, 15), 4) == (
+        time(2, 15),
+        time(6, 15),
+        time(10, 15),
+        time(14, 15),
+        time(18, 15),
+        time(22, 15),
     )
     assert should_notify_cycle(
         notifications_enabled=True,

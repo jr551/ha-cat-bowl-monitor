@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import time
 from typing import Any
 
 VALID_LEVELS = frozenset({"empty", "low", "okay", "unknown"})
+
+
+def interval_schedule(anchor: time, interval_hours: int) -> tuple[time, ...]:
+    """Return evenly spaced local wall-clock checks anchored to one time."""
+    anchor_minutes = anchor.hour * 60 + anchor.minute
+    return tuple(
+        time(hour=minutes // 60, minute=minutes % 60)
+        for minutes in sorted(
+            {
+                (anchor_minutes + offset * 60) % (24 * 60)
+                for offset in range(0, 24, interval_hours)
+            }
+        )
+    )
 
 
 class AssessmentError(ValueError):

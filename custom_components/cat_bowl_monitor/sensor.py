@@ -37,7 +37,8 @@ class BowlStatusSensor(BowlEntity, SensorEntity):
     def __init__(self, runtime: BowlRuntime, bowl_name: str) -> None:
         super().__init__(runtime)
         self.bowl_name = bowl_name
-        self._attr_name = f"{bowl_name.title()} bowl status"
+        label = "Primary dry" if bowl_name == "dry" else "Secondary food"
+        self._attr_name = f"{label} status"
         self._attr_unique_id = f"{runtime.entry.entry_id}_{bowl_name}_status"
 
     @property
@@ -104,7 +105,8 @@ class BowlFillSensor(BowlEntity, SensorEntity):
     def __init__(self, runtime: BowlRuntime, bowl_name: str) -> None:
         super().__init__(runtime)
         self.bowl_name = bowl_name
-        self._attr_name = f"{bowl_name.title()} bowl fill"
+        label = "Primary dry" if bowl_name == "dry" else "Secondary food"
+        self._attr_name = f"{label} fill"
         self._attr_unique_id = f"{runtime.entry.entry_id}_{bowl_name}_fill"
 
     @property

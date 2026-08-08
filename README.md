@@ -21,6 +21,8 @@ actions.
   reference.
 - Configurable daily check times, camera light, pet name, bowl layout, and
   confidence threshold.
+- Optional repeating checks every 3, 4, 6, 8, 12, or 24 hours, anchored to the
+  first daily check time.
 - Direct OpenAI-compatible API settings, or credential reuse from the
   [UBox Camera](https://github.com/jr551/ha-ubox-camera) integration.
 - Optional primary and secondary feeder actions using a Home Assistant scene,
@@ -29,6 +31,8 @@ actions.
 - Low-noise notifications by default: routine no-action checks stay silent,
   while feed actions, blocked feeds, and cycle failures are announced. An
   option can restore summaries for every scheduled check.
+- Family summaries explain what each zone showed, whether 1R was dispensed,
+  why it was or was not dispensed, and measured food use since the baseline.
 - Automatic baseline reset after every observed scheduled or manual dispense,
   followed by a post-feed image after the food has settled. This prevents an
   external feeder schedule from making consumption look artificially low.
@@ -55,6 +59,9 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
   notification; after 90 seconds it records a new post-feed baseline.
 - A manual **Check now** only takes a sample and can never dispense food.
 - Unknown, hidden, dark, or low-confidence bowls fail closed.
+- Only the configured primary dry-food zone can drive the primary feeder.
+  Secondary wet-food, treat, or temporary-bowl zones are reporting-only when
+  no secondary feeder action is configured.
 
 The selected scene, script, or button defines the actual dose. For Tuya
 feeders whose individual hoppers are unavailable as native Home Assistant
