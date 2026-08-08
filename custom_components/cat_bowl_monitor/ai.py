@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_BOWL_DESCRIPTION,
     MAX_PROVIDER_RESPONSE_BYTES,
     PROVIDER_TIMEOUT,
+    PROVIDER_PARSE_ATTEMPTS,
     UBOX_CONF_AI_API_KEY,
     UBOX_CONF_AI_BASE_URL,
     UBOX_CONF_AI_MODEL,
@@ -45,10 +46,10 @@ SYSTEM_PROMPT_TEMPLATE = (
     "dark, blurred, or out of frame. The wet bowl may contain wet food or be "
     "clean and reflective; do not confuse reflections with food. "
     "Do not infer identity, intent, emotion, or events outside the image. "
-    "Return only JSON with dry_level, dry_fill_percent, dry_confidence, "
-    "dry_visible, wet_level, wet_fill_percent, wet_confidence, wet_visible, "
-    "and summary. Levels must be empty|low|okay|unknown; percentages are "
-    "integers 0-100 or null; confidences are numbers 0-1."
+    'Return only compact JSON shaped as {{"dry":{{"level":...,"fill":...,'
+    '"confidence":...,"visible":...}},"wet":{{...}},"summary":...}}. '
+    "Levels must be empty|low|okay|unknown; fill is an integer 0-100 or null; "
+    "confidence is 0-1 and visible is boolean."
     " Summary must contain no more than 10 words."
 )
 
@@ -152,16 +153,24 @@ async def async_assess_bowl(
                 ],
             },
         ],
-        "max_tokens": 2048,
+        "max_tokens": 350,
         "temperature": 0.1,
         "stream": False,
         "user": user_key,
     }
-    body = await _async_provider_request(hass, settings, request)
-    try:
-        return parse_provider_response(body), settings.model
-    except AssessmentError as err:
-        raise ProviderError(str(err)) from err
+    last_error: AssessmentError | None = None
+    for attempt in range(PROVIDER_PARSE_ATTEMPTS):
+        if attempt:
+            request["messages"][1]["content"][0]["text"] = (
+                "The previous response was invalid. Reassess the image and return "
+                "only the small required JSON object, with no prose or markdown."
+            )
+        body = await _async_provider_request(hass, settings, request)
+        try:
+            return parse_provider_response(body), settings.model
+        except AssessmentError as err:
+            last_error = err
+    raise ProviderError(str(last_error)) from last_error
 
 
 async def _async_provider_request(
@@ -250,7 +259,7 @@ async def async_compare_consumption(
                 ],
             },
         ],
-        "max_tokens": 2048,
+        "max_tokens": 220,
         "temperature": 0.1,
         "stream": False,
         "user": user_key,

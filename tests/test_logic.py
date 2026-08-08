@@ -57,6 +57,25 @@ def test_parse_two_bowl_assessment() -> None:
     assert result.wet.fill_percent == 0
 
 
+def test_parse_compact_nested_assessment() -> None:
+    result = parse_provider_response(
+        provider_body(
+            {
+                "dry": {"level": "low", "fill": 12, "confidence": 0.9, "visible": True},
+                "wet": {
+                    "level": "empty",
+                    "fill": 0,
+                    "confidence": 0.8,
+                    "visible": True,
+                },
+                "summary": "Dry low; wet empty.",
+            }
+        )
+    )
+    assert result.dry.fill_percent == 12
+    assert result.wet.level == "empty"
+
+
 def test_parse_fenced_assessment_with_trailing_text() -> None:
     content = f"```json\n{json.dumps(two_bowl_result())}\n```\nIgnored trailing text"
     result = parse_provider_response(
@@ -80,6 +99,14 @@ def test_invalid_level_is_rejected() -> None:
     payload["dry_level"] = "half"
     with pytest.raises(AssessmentError):
         parse_provider_response(provider_body(payload))
+
+
+def test_truncated_provider_json_is_rejected_safely() -> None:
+    body = json.dumps(
+        {"choices": [{"message": {"content": '{"dry_level":"empty"'}}]}
+    ).encode()
+    with pytest.raises(AssessmentError):
+        parse_provider_response(body)
 
 
 def test_parse_consumption_comparison() -> None:

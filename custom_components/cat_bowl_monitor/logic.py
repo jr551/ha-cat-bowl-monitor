@@ -65,16 +65,21 @@ def should_notify_cycle(
     left_needed: bool,
 ) -> bool:
     """Keep routine no-action cycles silent unless explicitly requested."""
-    return notifications_enabled and (
-        notify_no_action or right_needed or left_needed
-    )
+    return notifications_enabled and (notify_no_action or right_needed or left_needed)
 
 
 def _reading(result: dict[str, Any], prefix: str) -> BowlReading:
-    level = str(result[f"{prefix}_level"]).strip().lower()
-    visible = result[f"{prefix}_visible"]
-    confidence = float(result[f"{prefix}_confidence"])
-    raw_fill = result.get(f"{prefix}_fill_percent")
+    nested = result.get(prefix)
+    if isinstance(nested, dict):
+        level = str(nested["level"]).strip().lower()
+        visible = nested["visible"]
+        confidence = float(nested["confidence"])
+        raw_fill = nested.get("fill")
+    else:
+        level = str(result[f"{prefix}_level"]).strip().lower()
+        visible = result[f"{prefix}_visible"]
+        confidence = float(result[f"{prefix}_confidence"])
+        raw_fill = result.get(f"{prefix}_fill_percent")
     fill_percent = None if raw_fill is None else round(float(raw_fill))
     if level not in VALID_LEVELS:
         raise AssessmentError("The AI provider returned an unknown bowl level")

@@ -32,6 +32,10 @@ actions.
 - Automatic baseline reset after every observed scheduled or manual dispense,
   followed by a post-feed image after the food has settled. This prevents an
   external feeder schedule from making consumption look artificially low.
+- Bounded post-feed baseline retries recover from camera startup races and
+  malformed provider responses without ever retrying a feeder action.
+- Compact structured AI responses are retried once when parsing fails, and
+  unverified actuator calls are reported separately from completed feeds.
 - Bounded latest, before, after, and baseline images instead of an archive.
 
 ## Guarded feeding behaviour

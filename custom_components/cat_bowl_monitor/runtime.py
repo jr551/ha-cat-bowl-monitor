@@ -66,6 +66,7 @@ from .const import (
     ILLUMINATION_SETTLE_SECONDS,
     MAX_CONSECUTIVE_FAILURES_BEFORE_UNAVAILABLE,
     POST_FEED_SETTLE_SECONDS,
+    POST_FEED_BASELINE_RETRY_SECONDS,
     SCHEDULE_CATCHUP_MINUTES,
     STORE_VERSION,
 )
@@ -218,6 +219,11 @@ class BowlRuntime:
     async def async_start(self) -> None:
         """Restore state, register schedules, and take one safe sample."""
         await self._async_restore()
+        self._remove_schedule.append(
+            async_track_state_change_event(
+                self.hass, [self.camera_entity], self._camera_state_changed
+            )
+        )
         if self.feeding_sensor:
             self._remove_schedule.append(
                 async_track_state_change_event(
@@ -267,9 +273,14 @@ class BowlRuntime:
         self._remove_schedule.clear()
         if self._feed_baseline_task is not None:
             self._feed_baseline_task.cancel()
-            with suppress(asyncio.CancelledError):
+            with suppress(asyncio.CancelledError, Exception):
                 await self._feed_baseline_task
             self._feed_baseline_task = None
+
+    @callback
+    def _camera_state_changed(self, _event: Event) -> None:
+        """Refresh recovery controls when the camera becomes available."""
+        self._notify()
 
     @callback
     def _feeding_sensor_changed(self, event: Event) -> None:
@@ -317,38 +328,46 @@ class BowlRuntime:
         )
 
         elapsed = max(0.0, (dt_util.utcnow() - completed_at).total_seconds())
-        await asyncio.sleep(max(0.0, POST_FEED_SETTLE_SECONDS - elapsed))
-        if self.pending_feed_baseline_at != completed_at:
-            return
-        if self._cycle_lock.locked():
-            return
-
-        async with self._check_lock:
-            if self._cycle_lock.locked():
+        delays = (
+            max(0.0, POST_FEED_SETTLE_SECONDS - elapsed),
+            *POST_FEED_BASELINE_RETRY_SECONDS,
+        )
+        for attempt, delay in enumerate(delays, start=1):
+            await asyncio.sleep(delay)
+            if self.pending_feed_baseline_at != completed_at:
                 return
-            try:
-                jpeg, assessment = await self._async_capture_assess("latest")
-                await self._async_apply_assessment(assessment)
-            except (
-                HomeAssistantError,
-                ProviderError,
-                RuntimeError,
-                TimeoutError,
-            ) as err:
-                self.baseline_reason = "feeder_completion_capture_failed"
-                await self._async_record_failure(err)
+            if self._cycle_lock.locked() or self._check_lock.locked():
+                continue
+            async with self._check_lock:
+                if self._cycle_lock.locked():
+                    continue
+                try:
+                    jpeg, assessment = await self._async_capture_assess("latest")
+                    await self._async_apply_assessment(assessment)
+                except Exception as err:  # noqa: BLE001 - recovery must stay pending
+                    self.baseline_reason = "feeder_completion_capture_retrying"
+                    await self._async_record_failure(err)
+                    self.hass.bus.async_fire(
+                        EVENT_BASELINE_RESET,
+                        self._baseline_payload("retrying"),
+                    )
+                    continue
+                await self._async_set_baseline(jpeg, "feeder_completion")
+                await self._async_save()
+                self._notify()
                 self.hass.bus.async_fire(
                     EVENT_BASELINE_RESET,
-                    self._baseline_payload("failed"),
+                    self._baseline_payload("completed"),
                 )
                 return
-            await self._async_set_baseline(jpeg, "feeder_completion")
-            await self._async_save()
-            self._notify()
-            self.hass.bus.async_fire(
-                EVENT_BASELINE_RESET,
-                self._baseline_payload("completed"),
-            )
+
+        self.baseline_reason = "feeder_completion_capture_failed"
+        await self._async_save()
+        self._notify()
+        self.hass.bus.async_fire(
+            EVENT_BASELINE_RESET,
+            self._baseline_payload("failed"),
+        )
 
     def _scheduled_datetimes(self, moment: datetime) -> tuple[datetime, ...]:
         return tuple(
@@ -397,12 +416,7 @@ class BowlRuntime:
         async with self._check_lock:
             try:
                 _, assessment = await self._async_capture_assess("latest")
-            except (
-                HomeAssistantError,
-                ProviderError,
-                RuntimeError,
-                TimeoutError,
-            ) as err:
+            except Exception as err:  # noqa: BLE001 - manual checks never actuate
                 await self._async_record_failure(err)
                 return
             await self._async_apply_assessment(assessment)
@@ -493,16 +507,25 @@ class BowlRuntime:
                     )
 
                 baseline_reason = (
-                    "scheduled_cycle_after_feed"
-                    if any_requested
-                    else "scheduled_cycle"
+                    "scheduled_cycle_after_feed" if any_requested else "scheduled_cycle"
                 )
                 await self._async_set_baseline(after_jpeg, baseline_reason)
                 self.last_feed_result = f"right={right_result}; left={left_result}"
-                feed_failed = (
+                feed_failed = (right_needed and right_result == "action_failed") or (
+                    left_needed and left_result == "action_failed"
+                )
+                feed_blocked = (
                     right_needed and not right_result.startswith("sent")
                 ) or (left_needed and not left_result.startswith("sent"))
-                self.last_cycle_status = "blocked" if feed_failed else "completed"
+                feed_unverified = (
+                    right_needed and right_result != "sent_and_completed"
+                ) or (left_needed and left_result != "sent_and_completed")
+                if feed_failed or feed_blocked:
+                    self.last_cycle_status = "blocked"
+                elif feed_unverified:
+                    self.last_cycle_status = "unverified"
+                else:
+                    self.last_cycle_status = "completed"
                 self.last_cycle_message = self._build_family_message(
                     right_needed,
                     left_needed,
@@ -522,11 +545,15 @@ class BowlRuntime:
                     self.last_family_delivery = "suppressed_no_action"
                 payload = self._cycle_payload()
                 self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, payload)
-                if self.last_cycle_status == "blocked":
+                if self.last_cycle_status in {"blocked", "unverified"}:
                     persistent_notification.async_create(
                         self.hass,
                         self.last_cycle_message,
-                        title="Cat Bowl Auto Feed is blocked",
+                        title=(
+                            "Cat Bowl Auto Feed is blocked"
+                            if self.last_cycle_status == "blocked"
+                            else "Cat Bowl Auto Feed needs verification"
+                        ),
                         notification_id=f"{DOMAIN}_{self.entry.entry_id}_blocked",
                     )
             except Exception as err:  # noqa: BLE001 - fail closed before feeding
