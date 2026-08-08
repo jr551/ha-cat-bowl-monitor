@@ -43,6 +43,8 @@ def two_bowl_result() -> dict:
         "wet_fill_percent": 0,
         "wet_confidence": 0.86,
         "wet_visible": True,
+        "cat_present": False,
+        "cat_confidence": 0.92,
         "summary": "Sparse kibble remains and the wet bowl is empty.",
     }
 
@@ -57,6 +59,7 @@ def test_parse_two_bowl_assessment() -> None:
     assert result.dry.fill_percent == 14
     assert result.wet.level == "empty"
     assert result.wet.fill_percent == 0
+    assert not result.cat_present
 
 
 def test_parse_compact_nested_assessment() -> None:
@@ -70,12 +73,16 @@ def test_parse_compact_nested_assessment() -> None:
                     "confidence": 0.8,
                     "visible": True,
                 },
+                "cat_present": True,
+                "cat_confidence": 0.88,
                 "summary": "Dry low; wet empty.",
             }
         )
     )
     assert result.dry.fill_percent == 12
     assert result.wet.level == "empty"
+    assert result.cat_present
+    assert result.cat_confidence == 0.88
 
 
 def test_parse_fenced_assessment_with_trailing_text() -> None:

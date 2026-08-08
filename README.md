@@ -31,8 +31,9 @@ actions.
 - Low-noise notifications by default: routine no-action checks stay silent,
   while feed actions, blocked feeds, and cycle failures are announced. An
   option can restore summaries for every scheduled check.
-- Family summaries explain what each zone showed, whether 1R was dispensed,
-  why it was or was not dispensed, and measured food use since the baseline.
+- Short Family summaries say whether 1R was dispensed and why. After a feed,
+  the integration takes a two-minute image and adds **Cat seen** only when the
+  AI confidently sees a cat.
 - Automatic baseline reset after every observed scheduled or manual dispense,
   followed by a post-feed image after the food has settled. This prevents an
   external feeder schedule from making consumption look artificially low.
@@ -56,7 +57,7 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
 - Failed or unverified feeds are never retried automatically.
 - A genuine `on` to `off` feeder-sensor transition immediately invalidates the
   old consumption comparison. It never actuates a feeder or sends a duplicate
-  notification; after 90 seconds it records a new post-feed baseline.
+  notification; after two minutes it records a new post-feed baseline.
 - A manual **Check now** only takes a sample and can never dispense food.
 - Unknown, hidden, dark, or low-confidence bowls fail closed.
 - Only the configured primary dry-food zone can drive the primary feeder.

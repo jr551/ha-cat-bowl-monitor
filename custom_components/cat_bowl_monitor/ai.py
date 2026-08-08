@@ -48,9 +48,11 @@ SYSTEM_PROMPT_TEMPLATE = (
     "reflective metal with food. Only PRIMARY DRY may influence dispensing. "
     "Do not infer identity, intent, emotion, or events outside the image. "
     'Return only compact JSON shaped as {{"dry":{{"level":...,"fill":...,'
-    '"confidence":...,"visible":...}},"wet":{{...}},"summary":...}}. '
+    '"confidence":...,"visible":...}},"wet":{{...}},"cat_present":...,'
+    '"cat_confidence":...,"summary":...}}. '
     "Levels must be empty|low|okay|unknown; fill is an integer 0-100 or null; "
-    "confidence is 0-1 and visible is boolean."
+    "confidence is 0-1 and visible is boolean. cat_present is true only when "
+    "a real cat is visibly present in the current frame; cat_confidence is 0-1."
     " Summary must contain no more than 10 words."
 )
 

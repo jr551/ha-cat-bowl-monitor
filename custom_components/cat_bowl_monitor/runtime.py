@@ -571,10 +571,8 @@ class BowlRuntime:
                 self.last_cycle_status = "error"
                 await self._async_record_failure(err)
                 self.last_cycle_message = (
-                    f"{self.pet_name} AI bowl cycle failed and will not retry "
-                    "automatically. "
-                    "Check the feeder history before feeding manually. "
-                    f"{self.last_error}"
+                    f"⚠️ {self.pet_name} food check failed. No food was "
+                    "automatically retried. Please check Home Assistant."
                 )
                 await self._async_notify_family(self.last_cycle_message)
             finally:
@@ -825,65 +823,41 @@ class BowlRuntime:
         after: Assessment,
     ) -> str:
         local_time = dt_util.as_local(self.last_cycle_at or dt_util.utcnow())
-        if right_needed or left_needed:
-            feed_failed = (right_needed and not right_result.startswith("sent")) or (
-                left_needed and not left_result.startswith("sent")
-            )
-            if feed_failed:
-                feed = (
-                    "Action: no food dispensed — a required action was "
-                    f"not safely completed (right={right_result}, left={left_result})."
-                )
+        fed = right_result.startswith("sent") or left_result.startswith("sent")
+        if right_needed:
+            if right_result == "sent_and_completed":
+                action = "Fed 1R — the dry bowl was empty."
+            elif right_result.startswith("sent"):
+                action = "Sent 1R — feeder completion was not confirmed."
             else:
-                actions = []
-                if right_needed:
-                    actions.append(f"1R dry portion ({right_result})")
-                if left_needed:
-                    actions.append(f"left feeder ({left_result})")
-                feed = "Action: dispensed " + ", ".join(actions) + "."
+                action = "No feed — 1R was safely blocked."
         else:
             if not before.dry.visible or before.dry.level == "unknown":
-                feed = "Action: no food dispensed — primary dry zone was unclear."
+                action = "No feed — the dry bowl was not clear enough."
             else:
-                feed = (
-                    "Action: no food dispensed — primary dry food remains "
-                    f"({before.dry.level}, {_percent_text(before.dry.fill_percent)} full)."
-                )
+                action = "No feed — dry food remains."
 
-        if self.consumption and self.consumption_from_at and self.consumption_to_at:
-            elapsed = max(
-                0,
-                round(
-                    (self.consumption_to_at - self.consumption_from_at).total_seconds()
-                    / 3600,
-                    1,
-                ),
-            )
-            dry_eaten = _percent_text(self.consumption.dry_eaten_percent)
-            wet_eaten = _percent_text(self.consumption.wet_eaten_percent)
-            reference = (
-                "last feeder dispense"
-                if self.consumption_baseline_reason == "feeder_completion"
-                else "previous sample"
-            )
-            eaten = (
-                f"Food activity since the {reference} (~{elapsed} h): "
-                f"primary dry {dry_eaten} used; secondary {wet_eaten} used."
+        if before.wet.visible and before.wet.level != "unknown":
+            secondary = (
+                f"Other food: {before.wet.level} "
+                f"({_percent_text(before.wet.fill_percent)})."
             )
         else:
-            eaten = "Food activity: baseline ready; change starts next check."
+            secondary = "Other food: not visible."
+
+        cat_line = (
+            "\nCat seen."
+            if fed
+            and after.cat_present
+            and after.cat_confidence >= self.confidence_threshold
+            else ""
+        )
 
         return (
-            f"🐾 {self.pet_name} food check — {local_time:%H:%M}\n"
-            f"{feed}\n"
-            f"Seen: primary dry {before.dry.level} "
-            f"({_percent_text(before.dry.fill_percent)}, {before.dry.confidence:.0%} sure); "
-            f"secondary {before.wet.level} "
-            f"({_percent_text(before.wet.fill_percent)}, {before.wet.confidence:.0%} sure).\n"
-            f"Result: primary dry {after.dry.level} "
-            f"({_percent_text(after.dry.fill_percent)}); secondary {after.wet.level} "
-            f"({_percent_text(after.wet.fill_percent)}).\n"
-            f"{eaten}"
+            f"🐾 {self.pet_name} food — {local_time:%H:%M}\n"
+            f"Dry: {before.dry.level} ({_percent_text(before.dry.fill_percent)}).\n"
+            f"{action}\n"
+            f"{secondary}{cat_line}"
         )
 
     async def _async_record_failure(self, error: Exception | str) -> None:

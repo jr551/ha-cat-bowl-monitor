@@ -44,6 +44,8 @@ class Assessment:
 
     dry: BowlReading
     wet: BowlReading
+    cat_present: bool
+    cat_confidence: float
     summary: str
 
 
@@ -121,6 +123,8 @@ def parse_provider_response(body: bytes | str) -> Assessment:
         summary = " ".join(str(result["summary"]).split())
         dry = _reading(result, "dry")
         wet = _reading(result, "wet")
+        cat_present = result["cat_present"]
+        cat_confidence = max(0.0, min(1.0, float(result["cat_confidence"])))
     except (
         KeyError,
         IndexError,
@@ -133,9 +137,15 @@ def parse_provider_response(body: bytes | str) -> Assessment:
             f"({type(err).__name__}: {err})"
         ) from err
 
-    if not summary:
+    if not summary or not isinstance(cat_present, bool):
         raise AssessmentError("The AI provider returned an invalid bowl assessment")
-    return Assessment(dry=dry, wet=wet, summary=summary[:500])
+    return Assessment(
+        dry=dry,
+        wet=wet,
+        cat_present=cat_present,
+        cat_confidence=cat_confidence,
+        summary=summary[:500],
+    )
 
 
 def parse_consumption_response(body: bytes | str) -> Consumption:
