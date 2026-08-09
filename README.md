@@ -63,6 +63,8 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
 - Effectively black frames are rejected before AI analysis. Useful low-light
   frames are normalized for vision, while inconclusive checks stay out of
   Family chat and cannot replace a good comparison baseline.
+- ESPHome cameras use their private local snapshot endpoint when available, so
+  illumination checks analyze a fresh lit frame instead of HA's cached image.
 - Only the configured primary dry-food zone can drive the primary feeder.
   Secondary wet-food, treat, or temporary-bowl zones are reporting-only when
   no secondary feeder action is configured.

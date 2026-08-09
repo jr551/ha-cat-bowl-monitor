@@ -18,6 +18,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
@@ -31,6 +33,7 @@ from .ai import (
     async_compare_consumption,
     provider_settings_from_config,
 )
+from .camera_source import private_esphome_snapshot_url
 from .const import (
     CAPTURE_TIMEOUT,
     CONF_AFTERNOON_TIME,
@@ -66,6 +69,7 @@ from .const import (
     EVENT_RECOVERED,
     EVENT_SCHEDULED_CYCLE,
     ILLUMINATION_SETTLE_SECONDS,
+    MAX_CAMERA_IMAGE_BYTES,
     MAX_CONSECUTIVE_FAILURES_BEFORE_UNAVAILABLE,
     POST_FEED_BASELINE_RETRY_SECONDS,
     POST_FEED_SETTLE_SECONDS,
@@ -640,9 +644,7 @@ class BowlRuntime:
                 )
                 turned_on = True
                 await asyncio.sleep(ILLUMINATION_SETTLE_SECONDS)
-            image = await async_get_image(
-                self.hass, self.camera_entity, timeout=CAPTURE_TIMEOUT
-            )
+            jpeg = await self._async_capture_fresh_image()
         finally:
             if turned_on:
                 await self.hass.services.async_call(
@@ -651,9 +653,6 @@ class BowlRuntime:
                     {"entity_id": self.light_entity},
                     blocking=True,
                 )
-        if not image.content:
-            raise RuntimeError("The camera returned an empty image")
-        jpeg = image.content
         if not camera_image_is_usable(jpeg):
             raise CameraImageNotUsable(
                 "Camera image was too dark or flat for a safe food check"
@@ -681,6 +680,41 @@ class BowlRuntime:
         self.consecutive_failures = 0
         self.check_count += 1
         return jpeg, assessment
+
+    async def _async_capture_fresh_image(self) -> bytes:
+        """Prefer a fresh ESPHome web snapshot over HA's cached camera frame."""
+        snapshot_url = self._esphome_snapshot_url()
+        if snapshot_url:
+            try:
+                async with asyncio.timeout(CAPTURE_TIMEOUT):
+                    async with async_get_clientsession(self.hass).get(
+                        snapshot_url, allow_redirects=False
+                    ) as response:
+                        if response.status == 200:
+                            jpeg = await response.content.read(
+                                MAX_CAMERA_IMAGE_BYTES + 1
+                            )
+                            if 0 < len(jpeg) <= MAX_CAMERA_IMAGE_BYTES:
+                                return jpeg
+            except Exception as err:  # noqa: BLE001 - HA camera is the fallback
+                _LOGGER.debug("Direct ESPHome snapshot failed: %s", err)
+
+        image = await async_get_image(
+            self.hass, self.camera_entity, timeout=CAPTURE_TIMEOUT
+        )
+        if not image.content:
+            raise RuntimeError("The camera returned an empty image")
+        return image.content
+
+    def _esphome_snapshot_url(self) -> str | None:
+        """Resolve a trusted local ESPHome camera entry to its snapshot URL."""
+        entity = er.async_get(self.hass).async_get(self.camera_entity)
+        if entity is None or entity.config_entry_id is None:
+            return None
+        entry = self.hass.config_entries.async_get_entry(entity.config_entry_id)
+        if entry is None or entry.domain != "esphome":
+            return None
+        return private_esphome_snapshot_url(str(entry.data.get("host", "")))
 
     async def _async_apply_assessment(self, assessment: Assessment) -> None:
         self.summary = assessment.summary
