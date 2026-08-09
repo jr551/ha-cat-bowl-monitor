@@ -66,6 +66,17 @@ class BowlStatusSensor(BowlEntity, SensorEntity):
             "observed_level": bowl["raw_level"],
             "confidence": bowl["confidence"],
             "visible": bowl["visible"],
+            "freshness": bowl["freshness"] if self.bowl_name == "wet" else None,
+            "secondary_kind": (
+                bowl["secondary_kind"] if self.bowl_name == "wet" else None
+            ),
+            "appearance": bowl["appearance"] if self.bowl_name == "wet" else None,
+            "batch_started_fresh": (
+                bowl["batch_started_fresh"] if self.bowl_name == "wet" else None
+            ),
+            "freshness_confidence": (
+                bowl["freshness_confidence"] if self.bowl_name == "wet" else None
+            ),
             "summary": self.runtime.summary or None,
             "candidate_level": bowl["candidate_level"],
             "candidate_count": bowl["candidate_count"],

@@ -16,7 +16,9 @@ async def async_setup_entry(
     entry: BowlConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    async_add_entities([BowlCheckButton(entry.runtime_data)])
+    async_add_entities(
+        [BowlCheckButton(entry.runtime_data), WetFoodAddedButton(entry.runtime_data)]
+    )
 
 
 class BowlCheckButton(BowlEntity, ButtonEntity):
@@ -35,3 +37,17 @@ class BowlCheckButton(BowlEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.runtime.async_check()
+
+
+class WetFoodAddedButton(BowlEntity, ButtonEntity):
+    """Mark the start of a known fresh wet-food batch."""
+
+    _attr_name = "Fresh wet food added"
+    _attr_icon = "mdi:food-drumstick"
+
+    def __init__(self, runtime: BowlRuntime) -> None:
+        super().__init__(runtime)
+        self._attr_unique_id = f"{runtime.entry.entry_id}_fresh_wet_food_added"
+
+    async def async_press(self) -> None:
+        await self.runtime.async_mark_wet_food_added()

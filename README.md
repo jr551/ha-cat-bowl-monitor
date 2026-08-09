@@ -79,6 +79,15 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
 - Only the configured primary dry-food zone can drive the primary feeder.
   Secondary wet-food, treat, or temporary-bowl zones are reporting-only when
   no secondary feeder action is configured.
+- The secondary zone first distinguishes wet food, treats, other food, empty,
+  or unknown. `fresh`, `dried`, and `mixed` apply only to a wet-food batch first
+  observed being newly added while moist; otherwise freshness stays `unknown`.
+  Home Assistant compares each classified type, appearance, and fill reading with
+  the prior stored reading; the vision model cannot infer historical freshness
+  from one frame. Secondary classification never influences dry-food feeding.
+- **Fresh wet food added** lets a household member explicitly start a known
+  moist wet-food batch when visual detection is uncertain; later checks track
+  that batch becoming mixed or dried. The button never operates either feeder.
 
 The selected scene, script, or button defines the actual dose. For Tuya
 feeders whose individual hoppers are unavailable as native Home Assistant

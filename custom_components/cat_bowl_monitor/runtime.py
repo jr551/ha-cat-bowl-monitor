@@ -89,6 +89,7 @@ from .logic import (
     BowlReading,
     Consumption,
     apply_confirmation,
+    derive_wet_freshness,
     interval_schedule,
     is_feeding_completion,
     is_usable_primary_assessment,
@@ -113,6 +114,11 @@ def _new_bowl_state() -> dict[str, Any]:
         "fill_percent": None,
         "confidence": None,
         "visible": False,
+        "freshness": "unknown",
+        "freshness_confidence": None,
+        "secondary_kind": "unknown",
+        "appearance": "unknown",
+        "batch_started_fresh": False,
     }
 
 
@@ -462,6 +468,17 @@ class BowlRuntime:
                 self.inconclusive_since = None
             await self._async_save()
             self._notify()
+
+    async def async_mark_wet_food_added(self) -> None:
+        """Start a user-confirmed fresh wet-food batch without feeding."""
+        wet = self.bowls["wet"]
+        wet["secondary_kind"] = "wet_food"
+        wet["appearance"] = "moist"
+        wet["freshness"] = "fresh"
+        wet["freshness_confidence"] = 1.0
+        wet["batch_started_fresh"] = True
+        await self._async_save()
+        self._notify()
 
     async def async_scheduled_cycle(self, now: datetime | None = None) -> None:
         """Run one idempotent assess-feed-reassess cycle."""
@@ -867,6 +884,7 @@ class BowlRuntime:
 
     async def _async_apply_assessment(self, assessment: Assessment) -> None:
         self.summary = assessment.summary
+        previous_wet = dict(self.bowls["wet"])
         for name, reading in (("dry", assessment.dry), ("wet", assessment.wet)):
             bowl = self.bowls[name]
             previous = bowl["stable_level"]
@@ -895,6 +913,22 @@ class BowlRuntime:
                     self.hass.bus.async_fire(EVENT_BECAME_EMPTY, payload)
                 elif previous == "empty":
                     self.hass.bus.async_fire(EVENT_RECOVERED, payload)
+        freshness, tracked = derive_wet_freshness(
+            current_kind=assessment.secondary_kind,
+            current_appearance=assessment.wet_appearance,
+            current_fill=assessment.wet.fill_percent,
+            previous_kind=str(previous_wet["secondary_kind"]),
+            previous_appearance=str(previous_wet["appearance"]),
+            previous_fill=previous_wet["fill_percent"],
+            batch_started_fresh=bool(previous_wet["batch_started_fresh"]),
+        )
+        self.bowls["wet"]["freshness"] = freshness
+        self.bowls["wet"]["secondary_kind"] = assessment.secondary_kind
+        self.bowls["wet"]["appearance"] = assessment.wet_appearance
+        self.bowls["wet"]["batch_started_fresh"] = tracked
+        self.bowls["wet"][
+            "freshness_confidence"
+        ] = assessment.wet_appearance_confidence
         self.hass.bus.async_fire(EVENT_CHECKED, self._event_payload())
 
     async def _async_compare_with_baseline(self, current_jpeg: bytes) -> None:
@@ -1072,8 +1106,19 @@ class BowlRuntime:
             )
 
         if before.wet.visible and before.wet.level != "unknown":
+            freshness = (
+                f", {self.bowls['wet']['freshness']}"
+                if before.secondary_kind == "wet_food"
+                and self.bowls["wet"]["freshness"] != "unknown"
+                else ""
+            )
+            kind = {
+                "wet_food": "wet food",
+                "treats": "treats",
+                "other_food": "other food",
+            }.get(before.secondary_kind, "other food")
             message += (
-                f" Other food: {before.wet.level}"
+                f" {kind.capitalize()}: {before.wet.level}{freshness}"
                 f" ({_percent_text(before.wet.fill_percent)})."
             )
 

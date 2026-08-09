@@ -44,12 +44,23 @@ SYSTEM_PROMPT_TEMPLATE = (
     "okay when more than a sparse amount remains, or unknown when hidden, too "
     "dark, blurred, or out of frame. The secondary zone may contain wet food, "
     "treats, another bowl, or nothing; do not invent a bowl or confuse clean "
-    "reflective metal with food. Only PRIMARY DRY may influence dispensing. "
+    "reflective metal with food. In this household wet food commonly appears as "
+    "a pale beige/pink moist minced, pâté-like, or soft-chunk mass and becomes "
+    "darker and drier over time. Treats are separate firm pieces rather than a "
+    "moist mass. First classify secondary_kind as wet_food, treats, other_food, "
+    "empty, or unknown. For wet food report only its visible physical appearance: "
+    "moist, dry, mixed, or unknown. For treats, other food, empty/hidden zones, "
+    "wet_appearance must be unknown. Do not infer historical freshness from one "
+    "frame and do not mistake lighting for moisture. "
+    "Only PRIMARY DRY may influence dispensing. "
     "Do not infer identity, intent, emotion, or events outside the image. "
     'Return only compact JSON shaped as {{"dry":{{"level":...,"fill":...,'
-    '"confidence":...,"visible":...}},"wet":{{...}},"cat_present":...,'
+    '"confidence":...,"visible":...}},"wet":{{...}},"secondary_kind":...,'
+    '"wet_appearance":...,"wet_appearance_confidence":...,"cat_present":...,'
     '"cat_confidence":...,"summary":...}}. '
     "Levels must be empty|low|okay|unknown; fill is an integer 0-100 or null; "
+    "secondary_kind must be wet_food|treats|other_food|empty|unknown. "
+    "wet_appearance must be moist|dry|mixed|unknown and its confidence is 0-1. "
     "confidence is 0-1 and visible is boolean. cat_present is true only when "
     "a real cat is visibly present in the current frame; cat_confidence is 0-1."
     " Summary must contain no more than 10 words."
@@ -155,7 +166,7 @@ async def async_assess_bowl(
                 ],
             },
         ],
-        "max_tokens": 350,
+        "max_tokens": 1000,
         "temperature": 0.1,
         "stream": False,
         "user": user_key,

@@ -20,6 +20,7 @@ SPEC.loader.exec_module(LOGIC)
 AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
 apply_confirmation = LOGIC.apply_confirmation
+derive_wet_freshness = LOGIC.derive_wet_freshness
 is_feeding_completion = LOGIC.is_feeding_completion
 is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
@@ -46,6 +47,9 @@ def two_bowl_result() -> dict:
         "wet_fill_percent": 0,
         "wet_confidence": 0.86,
         "wet_visible": True,
+        "secondary_kind": "wet_food",
+        "wet_appearance": "dry",
+        "wet_appearance_confidence": 0.88,
         "cat_present": False,
         "cat_confidence": 0.92,
         "summary": "Sparse kibble remains and the wet bowl is empty.",
@@ -62,6 +66,7 @@ def test_parse_two_bowl_assessment() -> None:
     assert result.dry.fill_percent == 14
     assert result.wet.level == "empty"
     assert result.wet.fill_percent == 0
+    assert result.wet_appearance == "dry"
     assert not result.cat_present
 
 
@@ -78,6 +83,9 @@ def test_parse_compact_nested_assessment() -> None:
                 },
                 "cat_present": True,
                 "cat_confidence": 0.88,
+                "secondary_kind": "wet_food",
+                "wet_appearance": "moist",
+                "wet_appearance_confidence": 0.91,
                 "summary": "Dry low; wet empty.",
             }
         )
@@ -86,6 +94,52 @@ def test_parse_compact_nested_assessment() -> None:
     assert result.wet.level == "empty"
     assert result.cat_present
     assert result.cat_confidence == 0.88
+    assert result.wet_appearance == "moist"
+
+
+def test_invalid_wet_appearance_is_rejected() -> None:
+    payload = two_bowl_result()
+    payload["wet_appearance"] = "old"
+    with pytest.raises(AssessmentError):
+        parse_provider_response(provider_body(payload))
+
+
+def test_treats_cannot_be_labelled_moist_wet_food() -> None:
+    payload = two_bowl_result()
+    payload["secondary_kind"] = "treats"
+    payload["wet_appearance"] = "moist"
+    with pytest.raises(AssessmentError):
+        parse_provider_response(provider_body(payload))
+
+
+def test_wet_batch_must_start_moist_before_it_can_dry() -> None:
+    assert derive_wet_freshness(
+        current_kind="wet_food",
+        current_appearance="dry",
+        current_fill=20,
+        previous_kind="unknown",
+        previous_appearance="unknown",
+        previous_fill=None,
+        batch_started_fresh=False,
+    ) == ("unknown", False)
+    assert derive_wet_freshness(
+        current_kind="wet_food",
+        current_appearance="moist",
+        current_fill=30,
+        previous_kind="other_food",
+        previous_appearance="unknown",
+        previous_fill=10,
+        batch_started_fresh=False,
+    ) == ("fresh", True)
+    assert derive_wet_freshness(
+        current_kind="wet_food",
+        current_appearance="dry",
+        current_fill=15,
+        previous_kind="wet_food",
+        previous_appearance="moist",
+        previous_fill=30,
+        batch_started_fresh=True,
+    ) == ("dried", True)
 
 
 def test_parse_fenced_assessment_with_trailing_text() -> None:

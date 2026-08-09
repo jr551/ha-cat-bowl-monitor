@@ -8,6 +8,10 @@ from datetime import datetime, time, timedelta
 from typing import Any
 
 VALID_LEVELS = frozenset({"empty", "low", "okay", "unknown"})
+VALID_WET_APPEARANCES = frozenset({"moist", "dry", "mixed", "unknown"})
+VALID_SECONDARY_KINDS = frozenset(
+    {"wet_food", "treats", "other_food", "empty", "unknown"}
+)
 
 
 def interval_schedule(anchor: time, interval_hours: int) -> tuple[time, ...]:
@@ -46,6 +50,9 @@ class Assessment:
     wet: BowlReading
     cat_present: bool
     cat_confidence: float
+    secondary_kind: str
+    wet_appearance: str
+    wet_appearance_confidence: float
     summary: str
 
 
@@ -100,6 +107,41 @@ def should_send_cat_photo(
     return last_sent_at is None or captured_at - last_sent_at >= timedelta(
         minutes=dedupe_minutes
     )
+
+
+def derive_wet_freshness(
+    *,
+    current_kind: str,
+    current_appearance: str,
+    current_fill: int | None,
+    previous_kind: str,
+    previous_appearance: str,
+    previous_fill: int | None,
+    batch_started_fresh: bool,
+) -> tuple[str, bool]:
+    """Track freshness only for a wet-food batch first observed moist."""
+    if current_kind != "wet_food":
+        return "unknown", False
+    clearly_added = (
+        current_appearance == "moist"
+        and (
+            previous_kind != "wet_food"
+            or previous_appearance == "dry"
+            or (
+                current_fill is not None
+                and previous_fill is not None
+                and current_fill >= previous_fill + 10
+            )
+        )
+    )
+    tracked = batch_started_fresh or clearly_added
+    if not tracked:
+        return "unknown", False
+    return {
+        "moist": "fresh",
+        "dry": "dried",
+        "mixed": "mixed",
+    }.get(current_appearance, "unknown"), True
 
 
 def is_usable_primary_assessment(
@@ -178,6 +220,11 @@ def parse_provider_response(body: bytes | str) -> Assessment:
         wet = _reading(result, "wet")
         cat_present = result["cat_present"]
         cat_confidence = max(0.0, min(1.0, float(result["cat_confidence"])))
+        secondary_kind = str(result["secondary_kind"]).strip().lower()
+        wet_appearance = str(result["wet_appearance"]).strip().lower()
+        wet_appearance_confidence = max(
+            0.0, min(1.0, float(result["wet_appearance_confidence"]))
+        )
     except (
         KeyError,
         IndexError,
@@ -190,13 +237,22 @@ def parse_provider_response(body: bytes | str) -> Assessment:
             f"({type(err).__name__}: {err})"
         ) from err
 
-    if not summary or not isinstance(cat_present, bool):
+    if (
+        not summary
+        or not isinstance(cat_present, bool)
+        or secondary_kind not in VALID_SECONDARY_KINDS
+        or wet_appearance not in VALID_WET_APPEARANCES
+        or (secondary_kind != "wet_food" and wet_appearance != "unknown")
+    ):
         raise AssessmentError("The AI provider returned an invalid bowl assessment")
     return Assessment(
         dry=dry,
         wet=wet,
         cat_present=cat_present,
         cat_confidence=cat_confidence,
+        secondary_kind=secondary_kind,
+        wet_appearance=wet_appearance,
+        wet_appearance_confidence=wet_appearance_confidence,
         summary=summary[:500],
     )
 
