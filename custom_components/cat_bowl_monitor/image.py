@@ -11,11 +11,26 @@ TARGET_LOW_LIGHT_MEAN = 85.0
 MIN_USEFUL_LUMINANCE_SPAN = 20
 
 
+def camera_luminance_range(jpeg: bytes) -> tuple[int, int]:
+    """Return the grayscale extrema used by the quality gate."""
+    with Image.open(BytesIO(jpeg)) as source:
+        return source.convert("L").getextrema()
+
+
+def camera_image_is_decodable(jpeg: bytes) -> bool:
+    """Return whether Pillow can fully decode the received camera image."""
+    try:
+        with Image.open(BytesIO(jpeg)) as source:
+            source.load()
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def camera_image_is_usable(jpeg: bytes) -> bool:
     """Reject effectively black frames before they reach the vision model."""
     try:
-        with Image.open(BytesIO(jpeg)) as source:
-            low, high = source.convert("L").getextrema()
+        low, high = camera_luminance_range(jpeg)
     except (OSError, ValueError):
         return False
     return high - low >= MIN_USEFUL_LUMINANCE_SPAN

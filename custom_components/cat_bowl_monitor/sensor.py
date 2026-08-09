@@ -87,6 +87,8 @@ class BowlStatusSensor(BowlEntity, SensorEntity):
             "last_error": self.runtime.last_error or None,
             "provider_source": provider_source,
             "model": self.runtime.last_model or None,
+            "last_capture_source": self.runtime.last_capture_source or None,
+            "last_capture_luminance_range": self.runtime.last_capture_luminance_range,
             "check_count": self.runtime.check_count,
             "schedule": ", ".join(
                 scheduled.strftime("%H:%M") for scheduled in self.runtime.schedule_times
@@ -192,4 +194,15 @@ class AutoFeedSensor(BowlEntity, SensorEntity):
             "right_feed_entity": self.runtime.right_feed_entity or None,
             "left_feed_entity": self.runtime.left_feed_entity or None,
             "fail_closed": True,
+            "inconclusive_since": (
+                self.runtime.inconclusive_since.isoformat()
+                if self.runtime.inconclusive_since
+                else None
+            ),
+            "last_fallback_feed_at": (
+                self.runtime.last_fallback_feed_at.isoformat()
+                if self.runtime.last_fallback_feed_at
+                else None
+            ),
+            "fallback_policy": "1R after 8h unclear; maximum once per 12h",
         }

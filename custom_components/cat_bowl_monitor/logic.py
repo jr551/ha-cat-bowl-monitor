@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time, timedelta
 from typing import Any
 
 VALID_LEVELS = frozenset({"empty", "low", "okay", "unknown"})
@@ -94,6 +94,30 @@ def is_usable_primary_assessment(
         and assessment.level != "unknown"
         and assessment.fill_percent is not None
         and assessment.confidence >= confidence_threshold
+    )
+
+
+def should_use_safety_feed(
+    *,
+    now: datetime,
+    inconclusive_since: datetime | None,
+    last_feeder_completion_at: datetime | None,
+    last_fallback_feed_at: datetime | None,
+    after_hours: int = 8,
+    cooldown_hours: int = 12,
+) -> bool:
+    """Allow one bounded fallback only after prolonged camera confusion."""
+    if inconclusive_since is None:
+        return False
+    if now - inconclusive_since < timedelta(hours=after_hours):
+        return False
+    if (
+        last_feeder_completion_at is not None
+        and last_feeder_completion_at > inconclusive_since
+    ):
+        return False
+    return last_fallback_feed_at is None or now - last_fallback_feed_at >= timedelta(
+        hours=cooldown_hours
     )
 
 

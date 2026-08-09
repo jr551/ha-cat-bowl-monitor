@@ -55,6 +55,10 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
 - The cycle key is saved before an actuator call, so a restart cannot repeat
   that scheduled feed.
 - Failed or unverified feeds are never retried automatically.
+- After eight continuous hours of inconclusive camera checks, the integration
+  may give one 1R safety portion only when no feeder completion occurred during
+  that period. This fallback is limited to once per 12 hours, is reported
+  clearly, and an unconfirmed action is never retried.
 - A genuine `on` to `off` feeder-sensor transition immediately invalidates the
   old consumption comparison. It never actuates a feeder or sends a duplicate
   notification; after two minutes it records a new post-feed baseline.
@@ -65,6 +69,10 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
   Family chat and cannot replace a good comparison baseline.
 - ESPHome cameras use their private local snapshot endpoint when available, so
   illumination checks analyze a fresh lit frame instead of HA's cached image.
+  The lamp settles for five seconds before capture so the OV2640 exposure has
+  time to adjust. Truncated JPEGs receive up to three bounded camera-only
+  retries; the feeder action is never retried, and a known direct endpoint does
+  not fall back to stale imagery.
 - Only the configured primary dry-food zone can drive the primary feeder.
   Secondary wet-food, treat, or temporary-bowl zones are reporting-only when
   no secondary feeder action is configured.

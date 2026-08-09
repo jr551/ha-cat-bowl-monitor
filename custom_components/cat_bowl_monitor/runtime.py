@@ -19,7 +19,6 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
@@ -33,7 +32,7 @@ from .ai import (
     async_compare_consumption,
     provider_settings_from_config,
 )
-from .camera_source import private_esphome_snapshot_url
+from .camera_source import fetch_bounded_snapshot, private_esphome_snapshot_url
 from .const import (
     CAPTURE_TIMEOUT,
     CONF_AFTERNOON_TIME,
@@ -73,10 +72,16 @@ from .const import (
     MAX_CONSECUTIVE_FAILURES_BEFORE_UNAVAILABLE,
     POST_FEED_BASELINE_RETRY_SECONDS,
     POST_FEED_SETTLE_SECONDS,
+    SAFETY_FALLBACK_AFTER_HOURS,
+    SAFETY_FALLBACK_COOLDOWN_HOURS,
     SCHEDULE_CATCHUP_MINUTES,
     STORE_VERSION,
 )
-from .image import camera_image_is_usable
+from .image import (
+    camera_image_is_decodable,
+    camera_image_is_usable,
+    camera_luminance_range,
+)
 from .logic import (
     Assessment,
     BowlReading,
@@ -86,6 +91,7 @@ from .logic import (
     is_feeding_completion,
     is_usable_primary_assessment,
     should_notify_cycle,
+    should_use_safety_feed,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -137,6 +143,8 @@ class BowlRuntime:
         self.last_success_at: datetime | None = None
         self.last_error = ""
         self.last_model = ""
+        self.last_capture_source = ""
+        self.last_capture_luminance_range: tuple[int, int] | None = None
         self.check_count = 0
         self.consecutive_failures = 0
         self.last_cycle_key = ""
@@ -145,6 +153,8 @@ class BowlRuntime:
         self.last_cycle_message = ""
         self.last_feed_result = "not_requested"
         self.last_family_delivery = ""
+        self.inconclusive_since: datetime | None = None
+        self.last_fallback_feed_at: datetime | None = None
         self.baseline_at: datetime | None = None
         self.baseline_reason = ""
         self.last_feeder_completion_at: datetime | None = None
@@ -441,6 +451,10 @@ class BowlRuntime:
                 await self._async_record_failure(err)
                 return
             await self._async_apply_assessment(assessment)
+            if is_usable_primary_assessment(
+                assessment.dry, self.confidence_threshold
+            ):
+                self.inconclusive_since = None
             await self._async_save()
             self._notify()
 
@@ -475,17 +489,12 @@ class BowlRuntime:
                     for assessment in (first, second)
                 )
                 if not usable:
-                    self.last_cycle_status = "inconclusive"
-                    self.last_feed_result = "right=not_requested; left=not_requested"
-                    self.last_cycle_message = (
-                        f"{self.pet_name} food check could not see the dry bowl."
+                    await self._async_handle_inconclusive(
+                        "Primary dry-food zone was not clearly visible", second
                     )
-                    self.last_family_delivery = "suppressed_inconclusive"
-                    self.consecutive_failures += 1
-                    self.last_error = "Primary dry-food zone was not clearly visible"
-                    self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
                     return
 
+                self.inconclusive_since = None
                 await self._async_compare_with_baseline(before_jpeg)
 
                 dry_empty = self._confirmed_empty(first.dry, second.dry)
@@ -606,14 +615,13 @@ class BowlRuntime:
                         ),
                         notification_id=f"{DOMAIN}_{self.entry.entry_id}_blocked",
                     )
-            except CameraImageNotUsable as err:
-                self.last_cycle_status = "inconclusive"
-                self.last_feed_result = "right=not_requested; left=not_requested"
-                self.last_cycle_message = (
-                    f"{self.pet_name} food check could not see the dry bowl."
-                )
-                self.last_family_delivery = "suppressed_inconclusive"
-                await self._async_record_failure(err)
+            except (
+                CameraImageNotUsable,
+                HomeAssistantError,
+                ProviderError,
+                TimeoutError,
+            ) as err:
+                await self._async_handle_inconclusive(err)
             except Exception as err:  # noqa: BLE001 - fail closed before feeding
                 self.last_cycle_status = "error"
                 await self._async_record_failure(err)
@@ -625,6 +633,81 @@ class BowlRuntime:
             finally:
                 await self._async_save()
                 self._notify()
+
+    async def _async_handle_inconclusive(
+        self, error: Exception | str, assessment: Assessment | None = None
+    ) -> None:
+        """Record camera confusion and make at most one bounded safety feed."""
+        now = dt_util.utcnow()
+        if self.inconclusive_since is None:
+            self.inconclusive_since = now
+        if (
+            self.last_feeder_completion_at is not None
+            and self.last_feeder_completion_at > self.inconclusive_since
+        ):
+            self.inconclusive_since = self.last_feeder_completion_at
+
+        self.last_cycle_status = "inconclusive"
+        self.last_feed_result = "right=not_requested; left=not_requested"
+        self.last_cycle_message = f"{self.pet_name} food check could not see the bowl."
+        self.last_family_delivery = "suppressed_inconclusive"
+        await self._async_record_failure(error)
+
+        if not should_use_safety_feed(
+            now=now,
+            inconclusive_since=self.inconclusive_since,
+            last_feeder_completion_at=self.last_feeder_completion_at,
+            last_fallback_feed_at=self.last_fallback_feed_at,
+            after_hours=SAFETY_FALLBACK_AFTER_HOURS,
+            cooldown_hours=SAFETY_FALLBACK_COOLDOWN_HOURS,
+        ):
+            self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
+            return
+
+        right_error = self._feed_action_error(self.right_feed_entity)
+        if self.feeding_sensor and self.hass.states.is_state(self.feeding_sensor, "on"):
+            right_error = "feeder_busy"
+        if right_error:
+            right_result = right_error
+        else:
+            right_result = await self._async_request_feed(
+                "right", self.right_feed_entity, "8-hour camera safety fallback"
+            )
+
+        after = assessment
+        if right_result.startswith("sent"):
+            self.last_fallback_feed_at = now
+            await asyncio.sleep(POST_FEED_SETTLE_SECONDS)
+            try:
+                after_jpeg, after = await self._async_capture_assess("after")
+                await self._async_apply_assessment(after)
+                await self._async_set_baseline(
+                    after_jpeg, "camera_safety_fallback_after_feed"
+                )
+            except Exception as err:  # noqa: BLE001 - feed must never be retried
+                await self._async_record_failure(err)
+                self._schedule_feed_baseline(dt_util.utcnow())
+
+        self.last_feed_result = f"right={right_result}; left=not_needed"
+        if right_result == "sent_and_completed":
+            self.last_cycle_status = "fallback_fed"
+            message = "⚠️ Camera unclear for 8h — gave safety portion 1R."
+        elif right_result.startswith("sent"):
+            self.last_cycle_status = "unverified"
+            message = "⚠️ Camera unclear for 8h — sent safety 1R; not confirmed."
+        else:
+            self.last_cycle_status = "blocked"
+            message = "⚠️ Camera unclear for 8h — safety feed was blocked."
+        if (
+            right_result.startswith("sent")
+            and after is not None
+            and after.cat_present
+            and after.cat_confidence >= self.confidence_threshold
+        ):
+            message += "\nCat seen."
+        self.last_cycle_message = message
+        await self._async_notify_family(message)
+        self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
 
     async def _async_capture_assess(self, image_slot: str) -> tuple[bytes, Assessment]:
         light_state = (
@@ -654,9 +737,16 @@ class BowlRuntime:
                     blocking=True,
                 )
         if not camera_image_is_usable(jpeg):
+            try:
+                self.last_capture_luminance_range = camera_luminance_range(jpeg)
+            except (OSError, ValueError):
+                self.last_capture_luminance_range = None
             raise CameraImageNotUsable(
-                "Camera image was too dark or flat for a safe food check"
+                "Camera image from "
+                f"{self.last_capture_source or 'unknown source'} was too dark "
+                f"or flat ({self.last_capture_luminance_range})"
             )
+        self.last_capture_luminance_range = camera_luminance_range(jpeg)
         settings = provider_settings_from_config(self.hass, self.options)
         assessment, model = await async_assess_bowl(
             self.hass,
@@ -685,25 +775,37 @@ class BowlRuntime:
         """Prefer a fresh ESPHome web snapshot over HA's cached camera frame."""
         snapshot_url = self._esphome_snapshot_url()
         if snapshot_url:
-            try:
-                async with asyncio.timeout(CAPTURE_TIMEOUT):
-                    async with async_get_clientsession(self.hass).get(
-                        snapshot_url, allow_redirects=False
-                    ) as response:
-                        if response.status == 200:
-                            jpeg = await response.content.read(
-                                MAX_CAMERA_IMAGE_BYTES + 1
-                            )
-                            if 0 < len(jpeg) <= MAX_CAMERA_IMAGE_BYTES:
-                                return jpeg
-            except Exception as err:  # noqa: BLE001 - HA camera is the fallback
-                _LOGGER.debug("Direct ESPHome snapshot failed: %s", err)
+            last_error = "no valid image"
+            for attempt in range(3):
+                try:
+                    jpeg = await self.hass.async_add_executor_job(
+                        fetch_bounded_snapshot,
+                        snapshot_url,
+                        MAX_CAMERA_IMAGE_BYTES,
+                        CAPTURE_TIMEOUT,
+                    )
+                    decodable = await self.hass.async_add_executor_job(
+                        camera_image_is_decodable, jpeg
+                    )
+                    if decodable:
+                        self.last_capture_source = "esphome_direct"
+                        return jpeg
+                    last_error = "truncated or invalid JPEG"
+                except Exception as err:  # noqa: BLE001 - bounded direct retry
+                    last_error = str(err) or type(err).__name__
+                if attempt < 2:
+                    await asyncio.sleep(0.5)
+            self.last_capture_source = "esphome_direct_failed"
+            raise CameraImageNotUsable(
+                f"Fresh ESPHome snapshot failed after 3 attempts: {last_error}"
+            )
 
         image = await async_get_image(
             self.hass, self.camera_entity, timeout=CAPTURE_TIMEOUT
         )
         if not image.content:
             raise RuntimeError("The camera returned an empty image")
+        self.last_capture_source = "home_assistant_camera"
         return image.content
 
     def _esphome_snapshot_url(self) -> str | None:
@@ -1003,6 +1105,12 @@ class BowlRuntime:
             self.last_cycle_message = str(loaded.get("last_cycle_message", ""))[:1500]
             self.last_feed_result = str(loaded.get("last_feed_result", "not_requested"))
             self.last_family_delivery = str(loaded.get("last_family_delivery", ""))
+            self.inconclusive_since = _parse_datetime(
+                loaded.get("inconclusive_since")
+            )
+            self.last_fallback_feed_at = _parse_datetime(
+                loaded.get("last_fallback_feed_at")
+            )
             self.last_success_at = _parse_datetime(loaded.get("last_success_at"))
             self.last_checked_at = _parse_datetime(loaded.get("last_checked_at"))
             self.last_cycle_at = _parse_datetime(loaded.get("last_cycle_at"))
@@ -1058,6 +1166,8 @@ class BowlRuntime:
                 "last_cycle_message": self.last_cycle_message,
                 "last_feed_result": self.last_feed_result,
                 "last_family_delivery": self.last_family_delivery,
+                "inconclusive_since": _iso(self.inconclusive_since),
+                "last_fallback_feed_at": _iso(self.last_fallback_feed_at),
                 "baseline_at": _iso(self.baseline_at),
                 "baseline_reason": self.baseline_reason,
                 "last_feeder_completion_at": _iso(self.last_feeder_completion_at),

@@ -3,7 +3,7 @@
 import importlib.util
 import json
 import sys
-from datetime import time
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +24,7 @@ is_feeding_completion = LOGIC.is_feeding_completion
 is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
 should_notify_cycle = LOGIC.should_notify_cycle
+should_use_safety_feed = LOGIC.should_use_safety_feed
 parse_consumption_response = LOGIC.parse_consumption_response
 parse_provider_response = LOGIC.parse_provider_response
 
@@ -225,3 +226,36 @@ def test_primary_assessment_must_be_visible_confident_and_quantified() -> None:
     assert not is_usable_primary_assessment(BowlReading("unknown", None, 0.9, False), 0.7)
     assert not is_usable_primary_assessment(BowlReading("low", None, 0.9, True), 0.7)
     assert not is_usable_primary_assessment(BowlReading("low", 10, 0.6, True), 0.7)
+
+
+def test_safety_feed_requires_eight_unclear_hours_and_twelve_hour_cooldown() -> None:
+    now = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
+    assert not should_use_safety_feed(
+        now=now,
+        inconclusive_since=now - timedelta(hours=7, minutes=59),
+        last_feeder_completion_at=None,
+        last_fallback_feed_at=None,
+    )
+    assert should_use_safety_feed(
+        now=now,
+        inconclusive_since=now - timedelta(hours=8),
+        last_feeder_completion_at=None,
+        last_fallback_feed_at=None,
+    )
+    assert not should_use_safety_feed(
+        now=now,
+        inconclusive_since=now - timedelta(hours=8),
+        last_feeder_completion_at=None,
+        last_fallback_feed_at=now - timedelta(hours=11, minutes=59),
+    )
+
+
+def test_confirmed_feed_during_confusion_blocks_safety_feed() -> None:
+    now = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
+    unclear = now - timedelta(hours=9)
+    assert not should_use_safety_feed(
+        now=now,
+        inconclusive_since=unclear,
+        last_feeder_completion_at=unclear + timedelta(hours=4),
+        last_fallback_feed_at=None,
+    )
