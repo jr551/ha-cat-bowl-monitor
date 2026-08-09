@@ -72,6 +72,7 @@ from .const import (
     SCHEDULE_CATCHUP_MINUTES,
     STORE_VERSION,
 )
+from .image import camera_image_is_usable
 from .logic import (
     Assessment,
     BowlReading,
@@ -79,10 +80,15 @@ from .logic import (
     apply_confirmation,
     interval_schedule,
     is_feeding_completion,
+    is_usable_primary_assessment,
     should_notify_cycle,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class CameraImageNotUsable(RuntimeError):
+    """The current frame cannot safely support a feeding decision."""
 
 
 def _new_bowl_state() -> dict[str, Any]:
@@ -457,6 +463,25 @@ class BowlRuntime:
                 await asyncio.sleep(CONFIRMATION_DELAY_SECONDS)
                 before_jpeg, second = await self._async_capture_assess("before")
                 await self._async_apply_assessment(second)
+
+                usable = all(
+                    is_usable_primary_assessment(
+                        assessment.dry, self.confidence_threshold
+                    )
+                    for assessment in (first, second)
+                )
+                if not usable:
+                    self.last_cycle_status = "inconclusive"
+                    self.last_feed_result = "right=not_requested; left=not_requested"
+                    self.last_cycle_message = (
+                        f"{self.pet_name} food check could not see the dry bowl."
+                    )
+                    self.last_family_delivery = "suppressed_inconclusive"
+                    self.consecutive_failures += 1
+                    self.last_error = "Primary dry-food zone was not clearly visible"
+                    self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
+                    return
+
                 await self._async_compare_with_baseline(before_jpeg)
 
                 dry_empty = self._confirmed_empty(first.dry, second.dry)
@@ -504,10 +529,17 @@ class BowlRuntime:
                 any_requested = right_result.startswith(
                     "sent"
                 ) or left_result.startswith("sent")
+                after_jpeg: bytes | None
                 if any_requested:
                     await asyncio.sleep(POST_FEED_SETTLE_SECONDS)
-                    after_jpeg, after = await self._async_capture_assess("after")
-                    await self._async_apply_assessment(after)
+                    try:
+                        after_jpeg, after = await self._async_capture_assess("after")
+                        await self._async_apply_assessment(after)
+                    except Exception as err:  # noqa: BLE001 - feed already happened
+                        after_jpeg = None
+                        after = second
+                        await self._async_record_failure(err)
+                        self._schedule_feed_baseline(dt_util.utcnow())
                 else:
                     after_jpeg = before_jpeg
                     after = second
@@ -517,10 +549,13 @@ class BowlRuntime:
                         self._write_image, "after", before_jpeg
                     )
 
-                baseline_reason = (
-                    "scheduled_cycle_after_feed" if any_requested else "scheduled_cycle"
-                )
-                await self._async_set_baseline(after_jpeg, baseline_reason)
+                if after_jpeg is not None:
+                    baseline_reason = (
+                        "scheduled_cycle_after_feed"
+                        if any_requested
+                        else "scheduled_cycle"
+                    )
+                    await self._async_set_baseline(after_jpeg, baseline_reason)
                 self.last_feed_result = f"right={right_result}; left={left_result}"
                 feed_failed = (right_needed and right_result == "action_failed") or (
                     left_needed and left_result == "action_failed"
@@ -567,6 +602,14 @@ class BowlRuntime:
                         ),
                         notification_id=f"{DOMAIN}_{self.entry.entry_id}_blocked",
                     )
+            except CameraImageNotUsable as err:
+                self.last_cycle_status = "inconclusive"
+                self.last_feed_result = "right=not_requested; left=not_requested"
+                self.last_cycle_message = (
+                    f"{self.pet_name} food check could not see the dry bowl."
+                )
+                self.last_family_delivery = "suppressed_inconclusive"
+                await self._async_record_failure(err)
             except Exception as err:  # noqa: BLE001 - fail closed before feeding
                 self.last_cycle_status = "error"
                 await self._async_record_failure(err)
@@ -611,6 +654,10 @@ class BowlRuntime:
         if not image.content:
             raise RuntimeError("The camera returned an empty image")
         jpeg = image.content
+        if not camera_image_is_usable(jpeg):
+            raise CameraImageNotUsable(
+                "Camera image was too dark or flat for a safe food check"
+            )
         settings = provider_settings_from_config(self.hass, self.options)
         assessment, model = await async_assess_bowl(
             self.hass,
@@ -669,7 +716,7 @@ class BowlRuntime:
 
     async def _async_compare_with_baseline(self, current_jpeg: bytes) -> None:
         baseline = self.latest_images.get("baseline")
-        if not baseline:
+        if not baseline or not camera_image_is_usable(baseline):
             self.consumption = None
             self.consumption_from_at = None
             self.consumption_to_at = None
@@ -822,28 +869,30 @@ class BowlRuntime:
         before: Assessment,
         after: Assessment,
     ) -> str:
-        local_time = dt_util.as_local(self.last_cycle_at or dt_util.utcnow())
         fed = right_result.startswith("sent") or left_result.startswith("sent")
         if right_needed:
             if right_result == "sent_and_completed":
-                action = "Fed 1R — the dry bowl was empty."
+                message = f"🐾 {self.pet_name}: fed 1R — dry bowl was empty."
             elif right_result.startswith("sent"):
-                action = "Sent 1R — feeder completion was not confirmed."
+                message = (
+                    f"⚠️ {self.pet_name}: sent 1R, but feeder completion "
+                    "was not confirmed."
+                )
             else:
-                action = "No feed — 1R was safely blocked."
+                message = (
+                    f"⚠️ {self.pet_name}: dry bowl was empty, but feeding was blocked."
+                )
         else:
-            if not before.dry.visible or before.dry.level == "unknown":
-                action = "No feed — the dry bowl was not clear enough."
-            else:
-                action = "No feed — dry food remains."
+            message = (
+                f"🐾 {self.pet_name}: dry food remains "
+                f"({_percent_text(before.dry.fill_percent)})."
+            )
 
         if before.wet.visible and before.wet.level != "unknown":
-            secondary = (
-                f"Other food: {before.wet.level} "
-                f"({_percent_text(before.wet.fill_percent)})."
+            message += (
+                f" Other food: {before.wet.level}"
+                f" ({_percent_text(before.wet.fill_percent)})."
             )
-        else:
-            secondary = "Other food: not visible."
 
         cat_line = (
             "\nCat seen."
@@ -853,12 +902,7 @@ class BowlRuntime:
             else ""
         )
 
-        return (
-            f"🐾 {self.pet_name} food — {local_time:%H:%M}\n"
-            f"Dry: {before.dry.level} ({_percent_text(before.dry.fill_percent)}).\n"
-            f"{action}\n"
-            f"{secondary}{cat_line}"
-        )
+        return f"{message}{cat_line}"
 
     async def _async_record_failure(self, error: Exception | str) -> None:
         self.consecutive_failures += 1

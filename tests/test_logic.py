@@ -21,6 +21,7 @@ AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
 apply_confirmation = LOGIC.apply_confirmation
 is_feeding_completion = LOGIC.is_feeding_completion
+is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
 should_notify_cycle = LOGIC.should_notify_cycle
 parse_consumption_response = LOGIC.parse_consumption_response
@@ -217,3 +218,10 @@ def test_low_confidence_resets_candidate_without_changing_state() -> None:
     assert result.stable_level == "okay"
     assert result.candidate_level is None
     assert result.candidate_count == 0
+
+
+def test_primary_assessment_must_be_visible_confident_and_quantified() -> None:
+    assert is_usable_primary_assessment(reading("low"), 0.7)
+    assert not is_usable_primary_assessment(BowlReading("unknown", None, 0.9, False), 0.7)
+    assert not is_usable_primary_assessment(BowlReading("low", None, 0.9, True), 0.7)
+    assert not is_usable_primary_assessment(BowlReading("low", 10, 0.6, True), 0.7)

@@ -31,7 +31,7 @@ actions.
 - Low-noise notifications by default: routine no-action checks stay silent,
   while feed actions, blocked feeds, and cycle failures are announced. An
   option can restore summaries for every scheduled check.
-- Short Family summaries say whether 1R was dispensed and why. After a feed,
+- One-line Family summaries say whether 1R was dispensed and why. After a feed,
   the integration takes a two-minute image and adds **Cat seen** only when the
   AI confidently sees a cat.
 - Automatic baseline reset after every observed scheduled or manual dispense,
@@ -60,6 +60,9 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
   notification; after two minutes it records a new post-feed baseline.
 - A manual **Check now** only takes a sample and can never dispense food.
 - Unknown, hidden, dark, or low-confidence bowls fail closed.
+- Effectively black frames are rejected before AI analysis. Useful low-light
+  frames are normalized for vision, while inconclusive checks stay out of
+  Family chat and cannot replace a good comparison baseline.
 - Only the configured primary dry-food zone can drive the primary feeder.
   Secondary wet-food, treat, or temporary-bowl zones are reporting-only when
   no secondary feeder action is configured.

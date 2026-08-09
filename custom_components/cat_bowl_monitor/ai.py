@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from io import BytesIO
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from PIL import Image
 
 from .const import (
     CONF_AI_API_KEY,
@@ -26,6 +24,7 @@ from .const import (
     UBOX_CONF_AI_MODEL,
     UBOX_DOMAIN,
 )
+from .image import prepare_vision_jpeg
 from .logic import (
     Assessment,
     AssessmentError,
@@ -125,7 +124,7 @@ async def async_assess_bowl(
     bowl_description: str,
 ) -> tuple[Assessment, str]:
     """Prepare and assess one image."""
-    prepared = await hass.async_add_executor_job(_prepare_jpeg, jpeg)
+    prepared = await hass.async_add_executor_job(prepare_vision_jpeg, jpeg)
     encoded = base64.b64encode(prepared).decode("ascii")
     request: dict[str, Any] = {
         "model": settings.model,
@@ -226,8 +225,8 @@ async def async_compare_consumption(
 ) -> tuple[Consumption, str]:
     """Compare two images and estimate consumption."""
     earlier, current = await asyncio.gather(
-        hass.async_add_executor_job(_prepare_jpeg, earlier_jpeg),
-        hass.async_add_executor_job(_prepare_jpeg, current_jpeg),
+        hass.async_add_executor_job(prepare_vision_jpeg, earlier_jpeg),
+        hass.async_add_executor_job(prepare_vision_jpeg, current_jpeg),
     )
     request: dict[str, Any] = {
         "model": settings.model,
@@ -299,13 +298,3 @@ def valid_https_url(value: str) -> bool:
         and not parsed.query
         and not parsed.fragment
     )
-
-
-def _prepare_jpeg(jpeg: bytes) -> bytes:
-    """Normalize a camera image for a bounded provider request."""
-    with Image.open(BytesIO(jpeg)) as image:
-        image = image.convert("RGB")
-        image.thumbnail((1280, 720), Image.Resampling.LANCZOS)
-        output = BytesIO()
-        image.save(output, format="JPEG", quality=78, optimize=True)
-        return output.getvalue()

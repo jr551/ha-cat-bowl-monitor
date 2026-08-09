@@ -85,6 +85,18 @@ def should_notify_cycle(
     return notifications_enabled and (notify_no_action or right_needed or left_needed)
 
 
+def is_usable_primary_assessment(
+    assessment: BowlReading, confidence_threshold: float
+) -> bool:
+    """Return whether a primary reading is safe for decisions and reporting."""
+    return (
+        assessment.visible
+        and assessment.level != "unknown"
+        and assessment.fill_percent is not None
+        and assessment.confidence >= confidence_threshold
+    )
+
+
 def _reading(result: dict[str, Any], prefix: str) -> BowlReading:
     nested = result.get(prefix)
     if isinstance(nested, dict):
