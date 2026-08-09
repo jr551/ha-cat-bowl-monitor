@@ -24,6 +24,7 @@ is_feeding_completion = LOGIC.is_feeding_completion
 is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
 should_notify_cycle = LOGIC.should_notify_cycle
+should_send_cat_photo = LOGIC.should_send_cat_photo
 should_use_safety_feed = LOGIC.should_use_safety_feed
 parse_consumption_response = LOGIC.parse_consumption_response
 parse_provider_response = LOGIC.parse_provider_response
@@ -149,6 +150,28 @@ def test_routine_no_action_cycle_is_silent_by_default() -> None:
         notify_no_action=False,
         right_needed=False,
         left_needed=False,
+    )
+
+
+def test_cat_photo_requires_confidence_and_deduplicates() -> None:
+    captured_at = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+    common = {
+        "cat_present": True,
+        "confidence_threshold": 0.8,
+        "captured_at": captured_at,
+        "dedupe_minutes": 30,
+    }
+    assert should_send_cat_photo(**common, cat_confidence=0.9, last_sent_at=None)
+    assert not should_send_cat_photo(**common, cat_confidence=0.79, last_sent_at=None)
+    assert not should_send_cat_photo(
+        **common,
+        cat_confidence=0.9,
+        last_sent_at=captured_at - timedelta(minutes=29),
+    )
+    assert should_send_cat_photo(
+        **common,
+        cat_confidence=0.9,
+        last_sent_at=captured_at - timedelta(minutes=30),
     )
 
 

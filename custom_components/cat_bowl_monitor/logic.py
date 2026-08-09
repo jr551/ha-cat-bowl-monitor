@@ -85,6 +85,23 @@ def should_notify_cycle(
     return notifications_enabled and (notify_no_action or right_needed or left_needed)
 
 
+def should_send_cat_photo(
+    *,
+    cat_present: bool,
+    cat_confidence: float,
+    confidence_threshold: float,
+    captured_at: datetime,
+    last_sent_at: datetime | None,
+    dedupe_minutes: int,
+) -> bool:
+    """Return whether a confident cat sighting should send a photo."""
+    if not cat_present or cat_confidence < confidence_threshold:
+        return False
+    return last_sent_at is None or captured_at - last_sent_at >= timedelta(
+        minutes=dedupe_minutes
+    )
+
+
 def is_usable_primary_assessment(
     assessment: BowlReading, confidence_threshold: float
 ) -> bool:

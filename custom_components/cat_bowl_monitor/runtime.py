@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import logging
 import os
@@ -35,6 +36,7 @@ from .ai import (
 from .camera_source import fetch_bounded_snapshot, private_esphome_snapshot_url
 from .const import (
     CAPTURE_TIMEOUT,
+    CAT_PHOTO_DEDUPE_MINUTES,
     CONF_AFTERNOON_TIME,
     CONF_BOWL_DESCRIPTION,
     CONF_CAMERA_ENTITY,
@@ -91,6 +93,7 @@ from .logic import (
     is_feeding_completion,
     is_usable_primary_assessment,
     should_notify_cycle,
+    should_send_cat_photo,
     should_use_safety_feed,
 )
 
@@ -145,6 +148,8 @@ class BowlRuntime:
         self.last_model = ""
         self.last_capture_source = ""
         self.last_capture_luminance_range: tuple[int, int] | None = None
+        self.last_cat_photo_at: datetime | None = None
+        self.last_cat_photo_delivery = ""
         self.check_count = 0
         self.consecutive_failures = 0
         self.last_cycle_key = ""
@@ -769,7 +774,49 @@ class BowlRuntime:
         self.last_error = ""
         self.consecutive_failures = 0
         self.check_count += 1
+        await self._async_maybe_notify_cat(jpeg, assessment, captured_at)
         return jpeg, assessment
+
+    async def _async_maybe_notify_cat(
+        self, jpeg: bytes, assessment: Assessment, captured_at: datetime
+    ) -> None:
+        """Send one exact sighting photo while suppressing cycle duplicates."""
+        if not should_send_cat_photo(
+            cat_present=assessment.cat_present,
+            cat_confidence=assessment.cat_confidence,
+            confidence_threshold=self.confidence_threshold,
+            captured_at=captured_at,
+            last_sent_at=self.last_cat_photo_at,
+            dedupe_minutes=CAT_PHOTO_DEDUPE_MINUTES,
+        ):
+            if not assessment.cat_present or (
+                assessment.cat_confidence < self.confidence_threshold
+            ):
+                return
+            self.last_cat_photo_delivery = "suppressed_duplicate"
+            return
+        self.last_cat_photo_at = captured_at
+        service_parts = self.notification_service.split(".", 1)
+        if len(service_parts) != 2 or not self.hass.services.has_service(
+            service_parts[0], service_parts[1]
+        ):
+            self.last_cat_photo_delivery = "service_unavailable"
+            return
+        try:
+            await self.hass.services.async_call(
+                service_parts[0],
+                service_parts[1],
+                {
+                    "message": f"🐈 Cat seen at {self.pet_name}'s food.",
+                    "image_base64": base64.b64encode(jpeg).decode("ascii"),
+                },
+                blocking=True,
+            )
+        except HomeAssistantError as err:
+            self.last_cat_photo_delivery = "failed"
+            _LOGGER.warning("Cat sighting photo delivery failed: %s", err)
+        else:
+            self.last_cat_photo_delivery = "accepted"
 
     async def _async_capture_fresh_image(self) -> bytes:
         """Prefer a fresh ESPHome web snapshot over HA's cached camera frame."""
@@ -1111,6 +1158,10 @@ class BowlRuntime:
             self.last_fallback_feed_at = _parse_datetime(
                 loaded.get("last_fallback_feed_at")
             )
+            self.last_cat_photo_at = _parse_datetime(loaded.get("last_cat_photo_at"))
+            self.last_cat_photo_delivery = str(
+                loaded.get("last_cat_photo_delivery", "")
+            )[:80]
             self.last_success_at = _parse_datetime(loaded.get("last_success_at"))
             self.last_checked_at = _parse_datetime(loaded.get("last_checked_at"))
             self.last_cycle_at = _parse_datetime(loaded.get("last_cycle_at"))
@@ -1168,6 +1219,8 @@ class BowlRuntime:
                 "last_family_delivery": self.last_family_delivery,
                 "inconclusive_since": _iso(self.inconclusive_since),
                 "last_fallback_feed_at": _iso(self.last_fallback_feed_at),
+                "last_cat_photo_at": _iso(self.last_cat_photo_at),
+                "last_cat_photo_delivery": self.last_cat_photo_delivery,
                 "baseline_at": _iso(self.baseline_at),
                 "baseline_reason": self.baseline_reason,
                 "last_feeder_completion_at": _iso(self.last_feeder_completion_at),

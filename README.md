@@ -34,6 +34,9 @@ actions.
 - One-line Family summaries say whether 1R was dispensed and why. After a feed,
   the integration takes a two-minute image and adds **Cat seen** only when the
   AI confidently sees a cat.
+- Any confident cat sighting sends that exact JPEG to Family chat with a short
+  caption. A 30-minute duplicate window prevents before/after checks from
+  posting the same visit twice.
 - Automatic baseline reset after every observed scheduled or manual dispense,
   followed by a post-feed image after the food has settled. This prevents an
   external feeder schedule from making consumption look artificially low.

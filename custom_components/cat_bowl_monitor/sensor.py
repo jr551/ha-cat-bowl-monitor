@@ -205,4 +205,10 @@ class AutoFeedSensor(BowlEntity, SensorEntity):
                 else None
             ),
             "fallback_policy": "1R after 8h unclear; maximum once per 12h",
+            "last_cat_photo_at": (
+                self.runtime.last_cat_photo_at.isoformat()
+                if self.runtime.last_cat_photo_at
+                else None
+            ),
+            "last_cat_photo_delivery": self.runtime.last_cat_photo_delivery or None,
         }
