@@ -29,6 +29,7 @@ from homeassistant.util import dt as dt_util
 
 from .ai import (
     ProviderError,
+    ProviderResponseError,
     async_assess_bowl,
     async_compare_consumption,
     provider_settings_from_config,
@@ -76,6 +77,7 @@ from .const import (
     MAX_CONSECUTIVE_FAILURES_BEFORE_UNAVAILABLE,
     POST_FEED_BASELINE_RETRY_SECONDS,
     POST_FEED_SETTLE_SECONDS,
+    PROVIDER_RETRY_DELAY_SECONDS,
     SAFETY_FALLBACK_AFTER_HOURS,
     SAFETY_FALLBACK_COOLDOWN_HOURS,
     SCHEDULE_CATCHUP_MINUTES,
@@ -100,6 +102,7 @@ from .logic import (
     should_send_cat_photo,
     should_use_safety_feed,
 )
+from .zone_map import load_zone_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,6 +140,8 @@ class BowlRuntime:
         self._remove_schedule: list[Callable[[], None]] = []
         self._check_lock = asyncio.Lock()
         self._cycle_lock = asyncio.Lock()
+        self._provider_retry_task: asyncio.Task[None] | None = None
+        self.pending_provider_retry_at: datetime | None = None
         self._feed_baseline_task: asyncio.Task[None] | None = None
         self._internal_feed_requests = 0
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
@@ -150,6 +155,7 @@ class BowlRuntime:
             "before": None,
             "after": None,
         }
+        self.zone_map_image: bytes | None = None
         self.summary = ""
         self.last_checked_at: datetime | None = None
         self.last_success_at: datetime | None = None
@@ -282,6 +288,8 @@ class BowlRuntime:
     async def async_start(self) -> None:
         """Restore state, register schedules, and take one safe sample."""
         await self._async_restore()
+        if self.pending_provider_retry_at is not None:
+            self._schedule_provider_retry(self.pending_provider_retry_at)
         self._remove_schedule.append(
             async_track_state_change_event(
                 self.hass, [self.camera_entity], self._camera_state_changed
@@ -339,6 +347,11 @@ class BowlRuntime:
             with suppress(asyncio.CancelledError, Exception):
                 await self._feed_baseline_task
             self._feed_baseline_task = None
+        if self._provider_retry_task is not None:
+            self._provider_retry_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._provider_retry_task
+            self._provider_retry_task = None
 
     @callback
     def _camera_state_changed(self, _event: Event) -> None:
@@ -369,6 +382,51 @@ class BowlRuntime:
             self._async_reset_baseline_after_feed(completed_at),
             name=f"{DOMAIN}_{self.entry.entry_id}_post_feed_baseline",
             eager_start=True,
+        )
+
+    @callback
+    def _schedule_provider_retry(self, retry_at: datetime | None = None) -> None:
+        """Schedule one delayed retry for a malformed provider response."""
+        if (
+            self._provider_retry_task is not None
+            and not self._provider_retry_task.done()
+        ):
+            return
+        retry_at = retry_at or (
+            dt_util.utcnow() + timedelta(seconds=PROVIDER_RETRY_DELAY_SECONDS)
+        )
+        self.pending_provider_retry_at = retry_at
+        self.last_cycle_status = "retry_scheduled"
+        remaining_minutes = max(
+            1,
+            int((retry_at - dt_util.utcnow()).total_seconds() + 59) // 60,
+        )
+        self.last_cycle_message = (
+            f"{self.pet_name} food check failed; retrying in "
+            f"{remaining_minutes} minute"
+            f"{'' if remaining_minutes == 1 else 's'}."
+        )
+        self._provider_retry_task = self.hass.async_create_background_task(
+            self._async_provider_retry(retry_at),
+            name=f"{DOMAIN}_{self.entry.entry_id}_provider_retry",
+            eager_start=True,
+        )
+        self._notify()
+
+    async def _async_provider_retry(self, retry_at: datetime) -> None:
+        """Run the one delayed retry without overlapping another check."""
+        delay = max(0.0, (retry_at - dt_util.utcnow()).total_seconds())
+        await asyncio.sleep(delay)
+        if self.pending_provider_retry_at != retry_at:
+            return
+        while self._cycle_lock.locked() or self._check_lock.locked():
+            await asyncio.sleep(5)
+        self.pending_provider_retry_at = None
+        await self._async_save()
+        await self._async_when_camera_ready(
+            self.async_scheduled_cycle,
+            None,
+            True,
         )
 
     async def _async_reset_baseline_after_feed(self, completed_at: datetime) -> None:
@@ -501,7 +559,9 @@ class BowlRuntime:
         await self._async_save()
         self._notify()
 
-    async def async_scheduled_cycle(self, now: datetime | None = None) -> None:
+    async def async_scheduled_cycle(
+        self, now: datetime | None = None, provider_retry: bool = False
+    ) -> None:
         """Run one idempotent assess-feed-reassess cycle."""
         if self._cycle_lock.locked():
             return
@@ -658,6 +718,12 @@ class BowlRuntime:
                         ),
                         notification_id=f"{DOMAIN}_{self.entry.entry_id}_blocked",
                     )
+            except ProviderResponseError as err:
+                await self._async_handle_inconclusive(
+                    err, allow_safety_feed=False
+                )
+                if not provider_retry:
+                    self._schedule_provider_retry()
             except (
                 CameraImageNotUsable,
                 HomeAssistantError,
@@ -674,11 +740,26 @@ class BowlRuntime:
                 )
                 await self._async_notify_family(self.last_cycle_message)
             finally:
+                if self.last_cycle_status not in {
+                    "checking",
+                    "inconclusive",
+                    "retry_scheduled",
+                    "error",
+                }:
+                    self.pending_provider_retry_at = None
+                    if (
+                        self._provider_retry_task is not None
+                        and not self._provider_retry_task.done()
+                    ):
+                        self._provider_retry_task.cancel()
                 await self._async_save()
                 self._notify()
 
     async def _async_handle_inconclusive(
-        self, error: Exception | str, assessment: Assessment | None = None
+        self,
+        error: Exception | str,
+        assessment: Assessment | None = None,
+        allow_safety_feed: bool = True,
     ) -> None:
         """Record camera confusion and make at most one bounded safety feed."""
         now = dt_util.utcnow()
@@ -695,6 +776,9 @@ class BowlRuntime:
         self.last_cycle_message = f"{self.pet_name} food check could not see the bowl."
         self.last_family_delivery = "suppressed_inconclusive"
         await self._async_record_failure(error)
+        if not allow_safety_feed:
+            self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
+            return
 
         if not should_use_safety_feed(
             now=now,
@@ -789,7 +873,6 @@ class BowlRuntime:
                 f"{self.last_capture_source or 'unknown source'} was too dark "
                 f"or flat ({self.last_capture_luminance_range})"
             )
-        self.last_capture_luminance_range = camera_luminance_range(jpeg)
         settings = provider_settings_from_config(self.hass, self.options)
         assessment, model = await async_assess_bowl(
             self.hass,
@@ -797,6 +880,7 @@ class BowlRuntime:
             self._user_key,
             settings,
             self.bowl_description,
+            self.zone_map_image,
         )
         captured_at = dt_util.utcnow()
         self.latest_images["latest"] = jpeg
@@ -968,6 +1052,7 @@ class BowlRuntime:
                 self._user_key,
                 provider_settings_from_config(self.hass, self.options),
                 self.bowl_description,
+                self.zone_map_image,
             )
             self.consumption_from_at = self.baseline_at
             self.consumption_to_at = dt_util.utcnow()
@@ -1216,6 +1301,9 @@ class BowlRuntime:
             self.last_cycle_key = str(loaded.get("last_cycle_key", ""))
             self.last_cycle_status = str(loaded.get("last_cycle_status", "never_run"))
             self.last_cycle_message = str(loaded.get("last_cycle_message", ""))[:1500]
+            self.pending_provider_retry_at = _parse_datetime(
+                loaded.get("pending_provider_retry_at")
+            )
             self.last_feed_result = str(loaded.get("last_feed_result", "not_requested"))
             self.last_family_delivery = str(loaded.get("last_family_delivery", ""))
             self.inconclusive_since = _parse_datetime(
@@ -1266,6 +1354,9 @@ class BowlRuntime:
                 )
             except OSError:
                 _LOGGER.warning("Could not restore bowl image %s", slot)
+        self.zone_map_image = await self.hass.async_add_executor_job(
+            load_zone_map, self.hass, self.camera_entity
+        )
 
     async def _async_save(self) -> None:
         await self._store.async_save(
@@ -1281,6 +1372,7 @@ class BowlRuntime:
                 "last_cycle_at": _iso(self.last_cycle_at),
                 "last_cycle_status": self.last_cycle_status,
                 "last_cycle_message": self.last_cycle_message,
+                "pending_provider_retry_at": _iso(self.pending_provider_retry_at),
                 "last_feed_result": self.last_feed_result,
                 "last_family_delivery": self.last_family_delivery,
                 "inconclusive_since": _iso(self.inconclusive_since),

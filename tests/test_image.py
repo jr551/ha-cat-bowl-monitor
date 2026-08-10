@@ -17,6 +17,7 @@ prepare_vision_jpeg = IMAGE_MODULE.prepare_vision_jpeg
 camera_image_is_usable = IMAGE_MODULE.camera_image_is_usable
 camera_luminance_range = IMAGE_MODULE.camera_luminance_range
 camera_image_is_decodable = IMAGE_MODULE.camera_image_is_decodable
+prepare_zone_map_jpeg = IMAGE_MODULE.prepare_zone_map_jpeg
 
 
 def _jpeg(level: int) -> bytes:
@@ -66,3 +67,16 @@ def test_dark_frame_with_real_contrast_is_usable() -> None:
     output = BytesIO()
     image.save(output, format="JPEG")
     assert camera_image_is_usable(output.getvalue())
+
+
+
+def test_zone_map_is_bounded_and_reencoded() -> None:
+    image = Image.new("RGBA", (2400, 1800), (25, 50, 75, 255))
+    output = BytesIO()
+    image.save(output, format="PNG")
+
+    prepared = prepare_zone_map_jpeg(output.getvalue())
+
+    with Image.open(BytesIO(prepared)) as decoded:
+        assert decoded.format == "JPEG"
+        assert decoded.size == (1600, 1200)

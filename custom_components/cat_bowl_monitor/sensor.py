@@ -101,6 +101,7 @@ class BowlStatusSensor(BowlEntity, SensorEntity):
             "last_capture_source": self.runtime.last_capture_source or None,
             "last_capture_luminance_range": self.runtime.last_capture_luminance_range,
             "check_count": self.runtime.check_count,
+            "zone_map_configured": self.runtime.zone_map_image is not None,
             "schedule": ", ".join(
                 scheduled.strftime("%H:%M") for scheduled in self.runtime.schedule_times
             ),
@@ -200,6 +201,11 @@ class AutoFeedSensor(BowlEntity, SensorEntity):
             ),
             "last_cycle_key": self.runtime.last_cycle_key or None,
             "last_feed_result": self.runtime.last_feed_result,
+            "provider_retry_at": (
+                self.runtime.pending_provider_retry_at.isoformat()
+                if self.runtime.pending_provider_retry_at
+                else None
+            ),
             "family_delivery": self.runtime.last_family_delivery or None,
             "message": self.runtime.last_cycle_message or None,
             "right_feed_entity": self.runtime.right_feed_entity or None,

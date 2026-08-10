@@ -53,3 +53,14 @@ def prepare_vision_jpeg(jpeg: bytes) -> bytes:
         output = BytesIO()
         image.save(output, format="JPEG", quality=82, optimize=True)
         return output.getvalue()
+
+
+def prepare_zone_map_jpeg(image_bytes: bytes) -> bytes:
+    """Validate and bound an owner-supplied zone map image."""
+    with Image.open(BytesIO(image_bytes)) as source:
+        source.load()
+        image = source.convert("RGB")
+        image.thumbnail((1600, 1200), Image.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=88, optimize=True)
+        return output.getvalue()

@@ -18,6 +18,7 @@ from .const import (
     CONF_BOWL_DESCRIPTION,
     CONF_CAMERA_ENTITY,
     CONF_CHECK_INTERVAL_HOURS,
+    CONF_CLEAR_ZONE_MAP,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_CONFIRMATION_SAMPLES,
     CONF_FEEDING_SENSOR,
@@ -30,6 +31,7 @@ from .const import (
     CONF_NOTIFY_NO_ACTION,
     CONF_PET_NAME,
     CONF_RIGHT_FEED_ENTITY,
+    CONF_ZONE_MAP_FILE,
     DEFAULT_AFTERNOON_TIME,
     DEFAULT_BOWL_DESCRIPTION,
     DEFAULT_CHECK_INTERVAL_HOURS,
@@ -44,6 +46,7 @@ from .const import (
     MAX_CONFIRMATION_SAMPLES,
     MIN_CONFIRMATION_SAMPLES,
 )
+from .zone_map import ZoneMapError, remove_zone_map, save_uploaded_zone_map_file
 
 _OPTIONAL_KEYS = (
     CONF_NOTIFICATION_SERVICE,
@@ -164,6 +167,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_BOWL_DESCRIPTION,
                 default=defaults.get(CONF_BOWL_DESCRIPTION, DEFAULT_BOWL_DESCRIPTION),
             ): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+            vol.Optional(CONF_ZONE_MAP_FILE): selector.FileSelector(
+                config=selector.FileSelectorConfig(
+                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                )
+            ),
+            vol.Optional(CONF_CLEAR_ZONE_MAP, default=False): bool,
         }
     )
     for key in (CONF_RIGHT_FEED_ENTITY, CONF_LEFT_FEED_ENTITY):
@@ -216,6 +225,26 @@ def _validate_entities_and_provider(
     return errors
 
 
+async def _async_apply_zone_map(
+    hass: Any,
+    camera_entity: str,
+    uploaded_file_id: str | None,
+    clear_zone_map: bool,
+) -> None:
+    """Persist an uploaded map or remove the existing map."""
+    if uploaded_file_id and clear_zone_map:
+        raise ZoneMapError("Choose an overlay map upload or removal, not both")
+    if uploaded_file_id:
+        await hass.async_add_executor_job(
+            save_uploaded_zone_map_file,
+            hass,
+            uploaded_file_id,
+            camera_entity,
+        )
+    elif clear_zone_map:
+        await hass.async_add_executor_job(remove_zone_map, hass, camera_entity)
+
+
 class CatBowlMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configure Cat Bowl Monitor."""
 
@@ -233,15 +262,29 @@ class CatBowlMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             user_input = _normalize(user_input)
+            uploaded_file_id = user_input.pop(CONF_ZONE_MAP_FILE, None)
+            clear_zone_map = bool(user_input.pop(CONF_CLEAR_ZONE_MAP, False))
             errors = _validate_entities_and_provider(self.hass, user_input)
+            if uploaded_file_id and clear_zone_map:
+                errors[CONF_ZONE_MAP_FILE] = "zone_map_conflict"
             if not errors:
                 camera_entity = str(user_input[CONF_CAMERA_ENTITY])
                 await self.async_set_unique_id(camera_entity)
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"{str(user_input[CONF_PET_NAME]).strip()} bowls",
-                    data=user_input,
-                )
+                try:
+                    await _async_apply_zone_map(
+                        self.hass,
+                        camera_entity,
+                        uploaded_file_id,
+                        clear_zone_map,
+                    )
+                except ZoneMapError:
+                    errors[CONF_ZONE_MAP_FILE] = "invalid_zone_map"
+                else:
+                    return self.async_create_entry(
+                        title=f"{str(user_input[CONF_PET_NAME]).strip()} bowls",
+                        data=user_input,
+                    )
         return self.async_show_form(
             step_id="user",
             data_schema=_schema(user_input or {}),
@@ -258,9 +301,23 @@ class CatBowlMonitorOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             user_input = _normalize(user_input)
+            uploaded_file_id = user_input.pop(CONF_ZONE_MAP_FILE, None)
+            clear_zone_map = bool(user_input.pop(CONF_CLEAR_ZONE_MAP, False))
             errors = _validate_entities_and_provider(self.hass, user_input)
+            if uploaded_file_id and clear_zone_map:
+                errors[CONF_ZONE_MAP_FILE] = "zone_map_conflict"
             if not errors:
-                return self.async_create_entry(title="", data=user_input)
+                try:
+                    await _async_apply_zone_map(
+                        self.hass,
+                        str(user_input[CONF_CAMERA_ENTITY]),
+                        uploaded_file_id,
+                        clear_zone_map,
+                    )
+                except ZoneMapError:
+                    errors[CONF_ZONE_MAP_FILE] = "invalid_zone_map"
+                else:
+                    return self.async_create_entry(title="", data=user_input)
         current = user_input or {
             **self.config_entry.data,
             **self.config_entry.options,
@@ -270,3 +327,5 @@ class CatBowlMonitorOptionsFlow(config_entries.OptionsFlow):
             data_schema=_schema(current),
             errors=errors,
         )
+
+

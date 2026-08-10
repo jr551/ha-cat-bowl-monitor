@@ -28,6 +28,8 @@ bowls monitored by the integration:
   reference.
 - Configurable daily check times, camera light, pet name, bowl layout, and
   confidence threshold.
+- Optional JPG/PNG zone-map overlay supplied alongside each live image to
+  identify the primary and secondary bowl regions.
 - Optional repeating checks every 2, 3, 4, 6, 8, 12, or 24 hours, anchored to
   the first daily check time.
 - An independent overnight interval can replace the normal slots from 22:00
@@ -55,6 +57,8 @@ bowls monitored by the integration:
 - Compact structured AI responses are retried with bounded attempts when parsing
   fails, and unverified actuator calls are reported separately from completed
   feeds.
+- A malformed scheduled AI assessment receives one delayed retry after 10
+  minutes; feeder actions themselves are never automatically retried.
 - Bounded latest, before, after, and baseline images instead of an archive.
 
 ## Guarded feeding behaviour
@@ -114,6 +118,9 @@ in the integration options.
    **Cat Bowl Monitor**.
 5. Select the bowl-facing camera and describe where the dry and wet bowls
    appear in its image.
+6. Optionally upload a JPG or PNG zone-map overlay that labels or outlines the
+   primary dry and secondary bowl zones. The overlay is reference-only and
+   does not provide current food state.
 
 The default schedule is 05:00 and 16:00 in Home Assistant's local timezone.
 Both times can be changed in the integration options.
@@ -127,6 +134,10 @@ the full `/chat/completions` URL.
 Alternatively, leave all three direct-provider fields blank to reuse the
 vision provider already configured in UBox Camera. The credential is read from
 the loaded config entry in memory and is not copied to Cat Bowl Monitor.
+
+When configured, the normalized zone-map image is sent with the live camera
+image for both status assessment and consumption comparison. Keep the overlay
+free of secrets and unrelated private information.
 
 ## Entities and events
 
@@ -151,10 +162,15 @@ It emits these Home Assistant events for advanced automations:
 
 ## Image handling and privacy
 
-Each check sends a resized JPEG to the configured provider. A consumption
-comparison sends the previous reference and current image. Home Assistant
-retains only `latest.jpg`, `before.jpg`, `after.jpg`, and `baseline.jpg` under
-`/config/cat_bowl_monitor/<entry-id>/`; each slot is replaced atomically.
+Each check sends a resized JPEG to the configured provider. When configured, a
+zone-map JPEG is sent alongside the live image as trusted layout context; the
+live image remains the only source of current food state. A consumption
+comparison sends the previous reference and current image, with the zone map
+included as layout context. Home Assistant retains only `latest.jpg`,
+`before.jpg`, `after.jpg`, and `baseline.jpg` under
+`/config/cat_bowl_monitor/<entry-id>/`; the optional zone map is stored
+separately under `/config/cat_bowl_monitor/zone_maps/` and each file is
+replaced atomically.
 
 Choose the camera view carefully. Avoid including people, private documents,
 screens, or areas outside the feeding station. Review your AI provider's data
