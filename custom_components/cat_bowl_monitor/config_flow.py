@@ -24,6 +24,7 @@ from .const import (
     CONF_LEFT_FEED_ENTITY,
     CONF_LIGHT_ENTITY,
     CONF_MORNING_TIME,
+    CONF_NIGHT_CHECK_INTERVAL_HOURS,
     CONF_NOTIFICATION_SERVICE,
     CONF_NOTIFICATIONS,
     CONF_NOTIFY_NO_ACTION,
@@ -35,6 +36,7 @@ from .const import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
+    DEFAULT_NIGHT_CHECK_INTERVAL_HOURS,
     DEFAULT_NOTIFICATIONS,
     DEFAULT_NOTIFY_NO_ACTION,
     DEFAULT_PET_NAME,
@@ -44,10 +46,6 @@ from .const import (
 )
 
 _OPTIONAL_KEYS = (
-    CONF_LIGHT_ENTITY,
-    CONF_RIGHT_FEED_ENTITY,
-    CONF_LEFT_FEED_ENTITY,
-    CONF_FEEDING_SENSOR,
     CONF_NOTIFICATION_SERVICE,
     CONF_AI_API_KEY,
     CONF_AI_BASE_URL,
@@ -141,6 +139,13 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_CHECK_INTERVAL_HOURS,
                 default=defaults.get(
                     CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS
+                ),
+            ): vol.In(CHECK_INTERVAL_OPTIONS),
+            vol.Required(
+                CONF_NIGHT_CHECK_INTERVAL_HOURS,
+                default=defaults.get(
+                    CONF_NIGHT_CHECK_INTERVAL_HOURS,
+                    DEFAULT_NIGHT_CHECK_INTERVAL_HOURS,
                 ),
             ): vol.In(CHECK_INTERVAL_OPTIONS),
             vol.Required(

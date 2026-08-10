@@ -47,6 +47,7 @@ from .const import (
     CONF_LEFT_FEED_ENTITY,
     CONF_LIGHT_ENTITY,
     CONF_MORNING_TIME,
+    CONF_NIGHT_CHECK_INTERVAL_HOURS,
     CONF_NOTIFICATION_SERVICE,
     CONF_NOTIFICATIONS,
     CONF_NOTIFY_NO_ACTION,
@@ -59,6 +60,7 @@ from .const import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_CONFIRMATION_SAMPLES,
     DEFAULT_MORNING_TIME,
+    DEFAULT_NIGHT_CHECK_INTERVAL_HOURS,
     DEFAULT_NOTIFICATIONS,
     DEFAULT_NOTIFY_NO_ACTION,
     DEFAULT_PET_NAME,
@@ -93,6 +95,7 @@ from .logic import (
     interval_schedule,
     is_feeding_completion,
     is_usable_primary_assessment,
+    merge_night_schedule,
     should_notify_cycle,
     should_send_cat_photo,
     should_use_safety_feed,
@@ -237,16 +240,34 @@ class BowlRuntime:
         interval = int(
             self.options.get(CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS)
         )
-        if interval:
-            anchor = _parse_time(
-                self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME)
-            )
-            return interval_schedule(anchor, interval)
-        values = (
-            self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME),
-            self.options.get(CONF_AFTERNOON_TIME, DEFAULT_AFTERNOON_TIME),
+        anchor = _parse_time(
+            self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME)
         )
-        return tuple(sorted({_parse_time(value) for value in values}))
+        if interval:
+            daytime_times = interval_schedule(anchor, interval)
+        else:
+            daytime_times = tuple(
+                sorted(
+                    {
+                        anchor,
+                        _parse_time(
+                            self.options.get(
+                                CONF_AFTERNOON_TIME, DEFAULT_AFTERNOON_TIME
+                            )
+                        ),
+                    }
+                )
+            )
+        return merge_night_schedule(
+            daytime_times,
+            anchor,
+            int(
+                self.options.get(
+                    CONF_NIGHT_CHECK_INTERVAL_HOURS,
+                    DEFAULT_NIGHT_CHECK_INTERVAL_HOURS,
+                )
+            ),
+        )
 
     @property
     def available(self) -> bool:

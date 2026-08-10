@@ -28,6 +28,33 @@ def interval_schedule(anchor: time, interval_hours: int) -> tuple[time, ...]:
     )
 
 
+def merge_night_schedule(
+    daytime_times: tuple[time, ...],
+    anchor: time,
+    night_interval_hours: int,
+    night_start: time = time(hour=22),
+) -> tuple[time, ...]:
+    """Replace daytime schedule slots with denser overnight checks."""
+    if not night_interval_hours:
+        return tuple(sorted(set(daytime_times)))
+    anchor_minutes = anchor.hour * 60 + anchor.minute
+    night_start_minutes = night_start.hour * 60 + night_start.minute
+
+    def is_night(check_time: time) -> bool:
+        minutes = check_time.hour * 60 + check_time.minute
+        return minutes >= night_start_minutes or minutes < anchor_minutes
+
+    night_times = interval_schedule(anchor, night_interval_hours)
+    return tuple(
+        sorted(
+            {
+                *{check_time for check_time in daytime_times if not is_night(check_time)},
+                *{check_time for check_time in night_times if is_night(check_time)},
+            }
+        )
+    )
+
+
 class AssessmentError(ValueError):
     """A safe-to-display provider assessment error."""
 
@@ -205,11 +232,21 @@ def _reading(result: dict[str, Any], prefix: str) -> BowlReading:
     return BowlReading(level, fill_percent, confidence, True)
 
 
+def _message_content(message: Any) -> Any:
+    """Return final content, falling back to a provider reasoning channel."""
+    if not isinstance(message, dict):
+        raise TypeError("Provider message is not an object")
+    content = message.get("content")
+    if content is None or content == "" or content == []:
+        content = message.get("reasoning_content")
+    return content
+
+
 def parse_provider_response(body: bytes | str) -> Assessment:
     """Parse one strict OpenAI-compatible chat-completions response."""
     try:
         payload = json.loads(body)
-        content: Any = payload["choices"][0]["message"]["content"]
+        content = _message_content(payload["choices"][0]["message"])
         if isinstance(content, list):
             content = " ".join(
                 str(item.get("text", "")) for item in content if isinstance(item, dict)
@@ -261,7 +298,7 @@ def parse_consumption_response(body: bytes | str) -> Consumption:
     """Parse a strict earlier-versus-current comparison."""
     try:
         payload = json.loads(body)
-        content: Any = payload["choices"][0]["message"]["content"]
+        content = _message_content(payload["choices"][0]["message"])
         if isinstance(content, list):
             content = " ".join(
                 str(item.get("text", "")) for item in content if isinstance(item, dict)

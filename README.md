@@ -21,8 +21,11 @@ actions.
   reference.
 - Configurable daily check times, camera light, pet name, bowl layout, and
   confidence threshold.
-- Optional repeating checks every 3, 4, 6, 8, 12, or 24 hours, anchored to the
-  first daily check time.
+- Optional repeating checks every 2, 3, 4, 6, 8, 12, or 24 hours, anchored to
+  the first daily check time.
+- An independent overnight interval can replace the normal slots from 22:00
+  until the first daily check; a 2-hour interval adds checks at the same
+  anchor-aligned times overnight.
 - Direct OpenAI-compatible API settings, or credential reuse from the
   [UBox Camera](https://github.com/jr551/ha-ubox-camera) integration.
 - Optional primary and secondary feeder actions using a Home Assistant scene,
@@ -42,8 +45,9 @@ actions.
   external feeder schedule from making consumption look artificially low.
 - Bounded post-feed baseline retries recover from camera startup races and
   malformed provider responses without ever retrying a feeder action.
-- Compact structured AI responses are retried once when parsing fails, and
-  unverified actuator calls are reported separately from completed feeds.
+- Compact structured AI responses are retried with bounded attempts when parsing
+  fails, and unverified actuator calls are reported separately from completed
+  feeds.
 - Bounded latest, before, after, and baseline images instead of an archive.
 
 ## Guarded feeding behaviour

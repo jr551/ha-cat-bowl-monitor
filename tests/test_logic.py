@@ -24,6 +24,7 @@ derive_wet_freshness = LOGIC.derive_wet_freshness
 is_feeding_completion = LOGIC.is_feeding_completion
 is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
+merge_night_schedule = LOGIC.merge_night_schedule
 should_notify_cycle = LOGIC.should_notify_cycle
 should_send_cat_photo = LOGIC.should_send_cat_photo
 should_use_safety_feed = LOGIC.should_use_safety_feed
@@ -95,6 +96,25 @@ def test_parse_compact_nested_assessment() -> None:
     assert result.cat_present
     assert result.cat_confidence == 0.88
     assert result.wet_appearance == "moist"
+
+
+def test_parse_reasoning_channel_when_content_is_empty() -> None:
+    result = parse_provider_response(
+        json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": json.dumps(two_bowl_result()),
+                        }
+                    }
+                ]
+            }
+        ).encode()
+    )
+    assert result.dry.level == "low"
+    assert result.wet.level == "empty"
 
 
 def test_invalid_wet_appearance_is_rejected() -> None:
@@ -255,6 +275,20 @@ def test_four_hour_schedule_wraps_from_0615() -> None:
         notify_no_action=True,
         right_needed=True,
         left_needed=True,
+    )
+
+
+def test_two_hour_overnight_schedule_replaces_normal_night_slots() -> None:
+    daytime = interval_schedule(time(6, 15), 4)
+    assert merge_night_schedule(daytime, time(6, 15), 2) == (
+        time(0, 15),
+        time(2, 15),
+        time(4, 15),
+        time(6, 15),
+        time(10, 15),
+        time(14, 15),
+        time(18, 15),
+        time(22, 15),
     )
 
 
