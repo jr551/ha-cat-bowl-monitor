@@ -14,6 +14,13 @@ and a separate wet-food bowl. It can check twice daily, compare food consumption
 between samples, notify you, and optionally request tightly guarded feeder
 actions.
 
+## Real bowl setup
+
+This is an example of the live camera view showing the real dry- and wet-food
+bowls monitored by the integration:
+
+![Real dry- and wet-food bowls](docs/real-food-bowls.jpg)
+
 ## Features
 
 - Independent dry- and wet-bowl status, fill estimate, and empty entities.
