@@ -81,6 +81,8 @@ A scheduled cycle takes two independent AI samples 30 seconds apart.
   old consumption comparison. It never actuates a feeder or sends a duplicate
   notification; after two minutes it records a new post-feed baseline.
 - A manual **Check now** only takes a sample and can never dispense food.
+- **Check and feed now** runs the same guarded two-sample cycle on demand; it
+  dispenses only when both fresh samples confidently show the primary bowl empty.
 - Unknown, hidden, dark, or low-confidence bowls fail closed.
 - Effectively black frames are rejected before AI analysis. Useful low-light
   frames are normalized for vision, while inconclusive checks stay out of
@@ -148,7 +150,7 @@ The integration creates:
 - dry and wet empty binary sensors
 - a food-eaten sensor
 - an auto-feed status sensor
-- a safe manual check button
+- a safe manual check button and an explicit guarded check-and-feed button
 - latest, before-feed, and after-feed sample cameras
 
 It emits these Home Assistant events for advanced automations:

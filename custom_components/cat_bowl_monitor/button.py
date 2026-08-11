@@ -17,7 +17,11 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     async_add_entities(
-        [BowlCheckButton(entry.runtime_data), WetFoodAddedButton(entry.runtime_data)]
+        [
+            BowlCheckButton(entry.runtime_data),
+            BowlCheckAndFeedButton(entry.runtime_data),
+            WetFoodAddedButton(entry.runtime_data),
+        ]
     )
 
 
@@ -37,6 +41,24 @@ class BowlCheckButton(BowlEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.runtime.async_check()
+
+
+class BowlCheckAndFeedButton(BowlEntity, ButtonEntity):
+    """Run an immediate guarded assess-feed-reassess cycle."""
+
+    _attr_name = "Check and feed now"
+    _attr_icon = "mdi:bowl-mix"
+
+    def __init__(self, runtime: BowlRuntime) -> None:
+        super().__init__(runtime)
+        self._attr_unique_id = f"{runtime.entry.entry_id}_check_and_feed_now"
+
+    @property
+    def available(self) -> bool:
+        return self.hass.states.get(self.runtime.camera_entity) is not None
+
+    async def async_press(self) -> None:
+        await self.runtime.async_scheduled_cycle()
 
 
 class WetFoodAddedButton(BowlEntity, ButtonEntity):
