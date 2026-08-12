@@ -249,3 +249,54 @@ def test_provider_retry_runs_cycle_once_with_retry_flag(monkeypatch) -> None:
     assert cycle_calls == [True]
     assert runtime.pending_provider_retry_at is None
     assert runtime._store.saved[-1]["pending_provider_retry_at"] is None
+
+
+
+def test_family_notification_is_suppressed_during_quiet_hours(monkeypatch) -> None:
+    module = _load_runtime(monkeypatch)
+    runtime = _build_runtime(module, _Hass(_Bus(), lambda *args, **kwargs: None))
+    runtime.entry.options = {
+        "notifications": True,
+        "notification_service": "rest_command.notify_family",
+        "morning_time": "06:15",
+    }
+
+    asyncio.run(runtime._async_notify_family("night message"))
+
+    assert runtime.last_family_delivery == "suppressed_quiet_hours"
+    assert runtime.last_notified_message == ""
+
+
+def test_repeated_problem_notification_is_suppressed(monkeypatch) -> None:
+    module = _load_runtime(monkeypatch)
+    hass = _Hass(_Bus(), lambda *args, **kwargs: None)
+    calls: list[dict] = []
+
+    class Services:
+        @staticmethod
+        def has_service(domain, service) -> bool:
+            return (domain, service) == ("rest_command", "notify_family")
+
+        @staticmethod
+        async def async_call(domain, service, data, **kwargs) -> None:
+            calls.append(data)
+
+    hass.services = Services()
+    runtime = _build_runtime(module, hass)
+    runtime.entry.options = {
+        "notifications": True,
+        "notification_service": "rest_command.notify_family",
+        "morning_time": "06:15",
+    }
+    module.dt_util.utcnow = lambda: datetime(
+        2026, 8, 10, 12, 0, tzinfo=timezone.utc
+    )
+
+    async def notify_twice() -> None:
+        await runtime._async_notify_family("same problem", suppress_repeat=True)
+        await runtime._async_notify_family("same problem", suppress_repeat=True)
+
+    asyncio.run(notify_twice())
+
+    assert calls == [{"message": "same problem"}]
+    assert runtime.last_family_delivery == "suppressed_unchanged"

@@ -108,15 +108,42 @@ def is_feeding_completion(old_state: str | None, new_state: str | None) -> bool:
     return old_state == "on" and new_state == "off"
 
 
+def is_quiet_time(
+    current: time,
+    *,
+    quiet_start: time,
+    quiet_end: time,
+) -> bool:
+    """Return whether a wall-clock time falls in a possibly overnight range."""
+    if quiet_start == quiet_end:
+        return False
+    if quiet_start < quiet_end:
+        return quiet_start <= current < quiet_end
+    return current >= quiet_start or current < quiet_end
+
+
+def family_observation_signature(assessment: Assessment) -> str:
+    """Describe meaningful bowl state while ignoring noisy percentage changes."""
+    return (
+        f"{assessment.dry.level}|{assessment.wet.level}|"
+        f"{assessment.secondary_kind}|{assessment.wet_appearance}"
+    )
+
+
 def should_notify_cycle(
     *,
     notifications_enabled: bool,
     notify_no_action: bool,
     right_needed: bool,
     left_needed: bool,
+    observation_changed: bool,
 ) -> bool:
-    """Keep routine no-action cycles silent unless explicitly requested."""
-    return notifications_enabled and (notify_no_action or right_needed or left_needed)
+    """Notify for feeder decisions or meaningful no-feed state changes."""
+    return notifications_enabled and (
+        right_needed
+        or left_needed
+        or (notify_no_action and observation_changed)
+    )
 
 
 def should_send_cat_photo(

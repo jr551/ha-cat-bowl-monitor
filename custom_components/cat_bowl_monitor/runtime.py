@@ -94,8 +94,10 @@ from .logic import (
     Consumption,
     apply_confirmation,
     derive_wet_freshness,
+    family_observation_signature,
     interval_schedule,
     is_feeding_completion,
+    is_quiet_time,
     is_usable_primary_assessment,
     merge_night_schedule,
     should_notify_cycle,
@@ -105,6 +107,7 @@ from .logic import (
 from .zone_map import load_zone_map
 
 _LOGGER = logging.getLogger(__name__)
+_NOTIFICATION_QUIET_START = time(hour=22)
 
 
 class CameraImageNotUsable(RuntimeError):
@@ -165,6 +168,7 @@ class BowlRuntime:
         self.last_capture_luminance_range: tuple[int, int] | None = None
         self.last_cat_photo_at: datetime | None = None
         self.last_cat_photo_delivery = ""
+        self._last_cat_observed = False
         self.check_count = 0
         self.consecutive_failures = 0
         self.last_cycle_key = ""
@@ -173,6 +177,8 @@ class BowlRuntime:
         self.last_cycle_message = ""
         self.last_feed_result = "not_requested"
         self.last_family_delivery = ""
+        self.last_family_observation_signature = ""
+        self.last_notified_message = ""
         self.inconclusive_since: datetime | None = None
         self.last_fallback_feed_at: datetime | None = None
         self.baseline_at: datetime | None = None
@@ -696,15 +702,37 @@ class BowlRuntime:
                     second,
                     after,
                 )
+                first_signature = family_observation_signature(first)
+                observation_signature = family_observation_signature(
+                    after if any_requested else second
+                )
+                observation_confirmed = any_requested or (
+                    first_signature == observation_signature
+                )
+                observation_changed = bool(
+                    observation_confirmed
+                    and self.last_family_observation_signature
+                    and observation_signature
+                    != self.last_family_observation_signature
+                )
                 if should_notify_cycle(
                     notifications_enabled=self.notifications_enabled,
                     notify_no_action=self.notify_no_action,
                     right_needed=right_needed,
                     left_needed=left_needed,
+                    observation_changed=observation_changed,
                 ):
                     await self._async_notify_family(self.last_cycle_message)
+                elif not observation_confirmed:
+                    self.last_family_delivery = "suppressed_unconfirmed"
+                elif not self.last_family_observation_signature:
+                    self.last_family_delivery = "suppressed_initial"
+                elif not observation_changed:
+                    self.last_family_delivery = "suppressed_unchanged"
                 else:
                     self.last_family_delivery = "suppressed_no_action"
+                if observation_confirmed:
+                    self.last_family_observation_signature = observation_signature
                 payload = self._cycle_payload()
                 self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, payload)
                 if self.last_cycle_status in {"blocked", "unverified"}:
@@ -738,7 +766,9 @@ class BowlRuntime:
                     f"⚠️ {self.pet_name} food check failed. No food was "
                     "automatically retried. Please check Home Assistant."
                 )
-                await self._async_notify_family(self.last_cycle_message)
+                await self._async_notify_family(
+                    self.last_cycle_message, suppress_repeat=True
+                )
             finally:
                 if self.last_cycle_status not in {
                     "checking",
@@ -833,7 +863,9 @@ class BowlRuntime:
         ):
             message += "\nCat seen."
         self.last_cycle_message = message
-        await self._async_notify_family(message)
+        await self._async_notify_family(
+            message, suppress_repeat=not right_result.startswith("sent")
+        )
         self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
 
     async def _async_capture_assess(self, image_slot: str) -> tuple[bytes, Assessment]:
@@ -902,7 +934,21 @@ class BowlRuntime:
     async def _async_maybe_notify_cat(
         self, jpeg: bytes, assessment: Assessment, captured_at: datetime
     ) -> None:
-        """Send one exact sighting photo while suppressing cycle duplicates."""
+        """Send a photo only when a confident cat sighting begins."""
+        cat_observed = (
+            assessment.cat_present
+            and assessment.cat_confidence >= self.confidence_threshold
+        )
+        was_observed = self._last_cat_observed
+        self._last_cat_observed = cat_observed
+        if not cat_observed:
+            return
+        if was_observed:
+            self.last_cat_photo_delivery = "suppressed_unchanged"
+            return
+        if self._notifications_quiet():
+            self.last_cat_photo_delivery = "suppressed_quiet_hours"
+            return
         if not should_send_cat_photo(
             cat_present=assessment.cat_present,
             cat_confidence=assessment.cat_confidence,
@@ -911,13 +957,8 @@ class BowlRuntime:
             last_sent_at=self.last_cat_photo_at,
             dedupe_minutes=CAT_PHOTO_DEDUPE_MINUTES,
         ):
-            if not assessment.cat_present or (
-                assessment.cat_confidence < self.confidence_threshold
-            ):
-                return
             self.last_cat_photo_delivery = "suppressed_duplicate"
             return
-        self.last_cat_photo_at = captured_at
         service_parts = self.notification_service.split(".", 1)
         if len(service_parts) != 2 or not self.hass.services.has_service(
             service_parts[0], service_parts[1]
@@ -1160,9 +1201,28 @@ class BowlRuntime:
             if remove is not None:
                 remove()
 
-    async def _async_notify_family(self, message: str) -> None:
+    def _notifications_quiet(self) -> bool:
+        local_time = dt_util.as_local(dt_util.utcnow()).time()
+        quiet_end = _parse_time(
+            self.options.get(CONF_MORNING_TIME, DEFAULT_MORNING_TIME)
+        )
+        return is_quiet_time(
+            local_time,
+            quiet_start=_NOTIFICATION_QUIET_START,
+            quiet_end=quiet_end,
+        )
+
+    async def _async_notify_family(
+        self, message: str, *, suppress_repeat: bool = False
+    ) -> None:
         if not self.notifications_enabled:
             self.last_family_delivery = "disabled"
+            return
+        if self._notifications_quiet():
+            self.last_family_delivery = "suppressed_quiet_hours"
+            return
+        if suppress_repeat and message == self.last_notified_message:
+            self.last_family_delivery = "suppressed_unchanged"
             return
         service_parts = self.notification_service.split(".", 1)
         if len(service_parts) != 2 or not self.hass.services.has_service(
@@ -1181,6 +1241,7 @@ class BowlRuntime:
             self.last_family_delivery = "failed"
             _LOGGER.warning("Cat bowl Family-chat delivery failed: %s", err)
         else:
+            self.last_notified_message = message
             self.last_family_delivery = "accepted"
 
     def _build_family_message(
@@ -1306,6 +1367,12 @@ class BowlRuntime:
             )
             self.last_feed_result = str(loaded.get("last_feed_result", "not_requested"))
             self.last_family_delivery = str(loaded.get("last_family_delivery", ""))
+            self.last_family_observation_signature = str(
+                loaded.get("last_family_observation_signature", "")
+            )[:200]
+            self.last_notified_message = str(
+                loaded.get("last_notified_message", "")
+            )[:1500]
             self.inconclusive_since = _parse_datetime(
                 loaded.get("inconclusive_since")
             )
@@ -1316,6 +1383,7 @@ class BowlRuntime:
             self.last_cat_photo_delivery = str(
                 loaded.get("last_cat_photo_delivery", "")
             )[:80]
+            self._last_cat_observed = bool(loaded.get("last_cat_observed", False))
             self.last_success_at = _parse_datetime(loaded.get("last_success_at"))
             self.last_checked_at = _parse_datetime(loaded.get("last_checked_at"))
             self.last_cycle_at = _parse_datetime(loaded.get("last_cycle_at"))
@@ -1375,10 +1443,15 @@ class BowlRuntime:
                 "pending_provider_retry_at": _iso(self.pending_provider_retry_at),
                 "last_feed_result": self.last_feed_result,
                 "last_family_delivery": self.last_family_delivery,
+                "last_family_observation_signature": (
+                    self.last_family_observation_signature
+                ),
+                "last_notified_message": self.last_notified_message,
                 "inconclusive_since": _iso(self.inconclusive_since),
                 "last_fallback_feed_at": _iso(self.last_fallback_feed_at),
                 "last_cat_photo_at": _iso(self.last_cat_photo_at),
                 "last_cat_photo_delivery": self.last_cat_photo_delivery,
+                "last_cat_observed": self._last_cat_observed,
                 "baseline_at": _iso(self.baseline_at),
                 "baseline_reason": self.baseline_reason,
                 "last_feeder_completion_at": _iso(self.last_feeder_completion_at),

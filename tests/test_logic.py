@@ -19,9 +19,11 @@ SPEC.loader.exec_module(LOGIC)
 
 AssessmentError = LOGIC.AssessmentError
 BowlReading = LOGIC.BowlReading
+family_observation_signature = LOGIC.family_observation_signature
 apply_confirmation = LOGIC.apply_confirmation
 derive_wet_freshness = LOGIC.derive_wet_freshness
 is_feeding_completion = LOGIC.is_feeding_completion
+is_quiet_time = LOGIC.is_quiet_time
 is_usable_primary_assessment = LOGIC.is_usable_primary_assessment
 interval_schedule = LOGIC.interval_schedule
 merge_night_schedule = LOGIC.merge_night_schedule
@@ -224,6 +226,7 @@ def test_routine_no_action_cycle_is_silent_by_default() -> None:
         notify_no_action=False,
         right_needed=False,
         left_needed=False,
+        observation_changed=False,
     )
 
 
@@ -263,18 +266,28 @@ def test_four_hour_schedule_wraps_from_0615() -> None:
         notify_no_action=False,
         right_needed=True,
         left_needed=False,
+        observation_changed=False,
     )
     assert should_notify_cycle(
         notifications_enabled=True,
         notify_no_action=True,
         right_needed=False,
         left_needed=False,
+        observation_changed=True,
+    )
+    assert not should_notify_cycle(
+        notifications_enabled=True,
+        notify_no_action=True,
+        right_needed=False,
+        left_needed=False,
+        observation_changed=False,
     )
     assert not should_notify_cycle(
         notifications_enabled=False,
         notify_no_action=True,
         right_needed=True,
         left_needed=True,
+        observation_changed=True,
     )
 
 
@@ -290,6 +303,32 @@ def test_two_hour_overnight_schedule_replaces_normal_night_slots() -> None:
         time(18, 15),
         time(22, 15),
     )
+
+
+def test_notification_quiet_hours_span_midnight_until_morning() -> None:
+    quiet_start = time(22)
+    quiet_end = time(6, 15)
+    assert is_quiet_time(time(22), quiet_start=quiet_start, quiet_end=quiet_end)
+    assert is_quiet_time(time(2), quiet_start=quiet_start, quiet_end=quiet_end)
+    assert not is_quiet_time(
+        time(6, 15), quiet_start=quiet_start, quiet_end=quiet_end
+    )
+    assert not is_quiet_time(
+        time(18), quiet_start=quiet_start, quiet_end=quiet_end
+    )
+
+
+def test_family_signature_ignores_fill_noise_but_tracks_food_state() -> None:
+    first = parse_provider_response(provider_body(two_bowl_result()))
+    changed_fill = two_bowl_result()
+    changed_fill["dry_fill_percent"] = 18
+    second = parse_provider_response(provider_body(changed_fill))
+    changed_state = two_bowl_result()
+    changed_state["dry_level"] = "empty"
+    changed_state["dry_fill_percent"] = 0
+    third = parse_provider_response(provider_body(changed_state))
+    assert family_observation_signature(first) == family_observation_signature(second)
+    assert family_observation_signature(first) != family_observation_signature(third)
 
 
 def test_two_confident_empty_samples_are_required() -> None:
