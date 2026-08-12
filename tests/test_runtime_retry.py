@@ -174,6 +174,28 @@ def _build_runtime(module, hass) -> object:
     return module.BowlRuntime(hass, _Entry())
 
 
+def test_restore_marks_interrupted_cycle_without_retrying_feed(monkeypatch) -> None:
+    module = _load_runtime(monkeypatch)
+    runtime = _build_runtime(module, _Hass(_Bus(), lambda *args, **kwargs: None))
+
+    async def load_interrupted_cycle() -> dict:
+        return {
+            "last_cycle_key": "2026-08-10-2215",
+            "last_cycle_status": "checking",
+            "last_cycle_message": "old message",
+            "last_feed_result": "not_requested",
+        }
+
+    runtime._store.async_load = load_interrupted_cycle
+
+    asyncio.run(runtime._async_restore())
+
+    assert runtime.last_cycle_key == "2026-08-10-2215"
+    assert runtime.last_cycle_status == "interrupted"
+    assert "interrupted by a restart" in runtime.last_cycle_message
+    assert runtime.last_feed_result == "not_requested"
+
+
 def test_cycle_schedules_one_retry_on_malformed_response(monkeypatch) -> None:
     module = _load_runtime(monkeypatch)
     bus = _Bus()
@@ -250,6 +272,82 @@ def test_provider_retry_runs_cycle_once_with_retry_flag(monkeypatch) -> None:
     assert runtime.pending_provider_retry_at is None
     assert runtime._store.saved[-1]["pending_provider_retry_at"] is None
 
+
+def test_family_notification_timeout_cannot_stall_cycle(monkeypatch) -> None:
+    module = _load_runtime(monkeypatch)
+    hass = _Hass(_Bus(), lambda *args, **kwargs: None)
+
+    class Services:
+        @staticmethod
+        def has_service(domain, service) -> bool:
+            return (domain, service) == ("rest_command", "notify_family")
+
+        @staticmethod
+        async def async_call(*args, **kwargs) -> None:
+            await asyncio.Event().wait()
+
+    hass.services = Services()
+    runtime = _build_runtime(module, hass)
+    runtime.entry.options = {
+        "notifications": True,
+        "notification_service": "rest_command.notify_family",
+        "morning_time": "06:15",
+    }
+    module._NOTIFICATION_TIMEOUT_SECONDS = 0.001
+    module.dt_util.utcnow = lambda: datetime(
+        2026, 8, 10, 12, 0, tzinfo=timezone.utc
+    )
+
+    asyncio.run(runtime._async_notify_family("bounded message"))
+
+    assert runtime.last_family_delivery == "failed"
+
+
+def test_cat_photo_notification_timeout_cannot_stall_capture(monkeypatch) -> None:
+    module = _load_runtime(monkeypatch)
+    hass = _Hass(_Bus(), lambda *args, **kwargs: None)
+
+    class Services:
+        @staticmethod
+        def has_service(domain, service) -> bool:
+            return (domain, service) == ("rest_command", "notify_family")
+
+        @staticmethod
+        async def async_call(*args, **kwargs) -> None:
+            await asyncio.Event().wait()
+
+    hass.services = Services()
+    runtime = _build_runtime(module, hass)
+    runtime.entry.options = {
+        "notifications": True,
+        "notification_service": "rest_command.notify_family",
+        "morning_time": "06:15",
+    }
+    module._NOTIFICATION_TIMEOUT_SECONDS = 0.001
+    module.dt_util.utcnow = lambda: datetime(
+        2026, 8, 10, 12, 0, tzinfo=timezone.utc
+    )
+    reading = module.BowlReading("okay", 50, 0.9, True)
+    assessment = module.Assessment(
+        reading,
+        reading,
+        True,
+        0.95,
+        "wet_food",
+        "moist",
+        0.9,
+        "Cat is visible.",
+    )
+
+    asyncio.run(
+        runtime._async_maybe_notify_cat(
+            b"jpeg",
+            assessment,
+            datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    assert runtime.last_cat_photo_delivery == "failed"
 
 
 def test_family_notification_is_suppressed_during_quiet_hours(monkeypatch) -> None:

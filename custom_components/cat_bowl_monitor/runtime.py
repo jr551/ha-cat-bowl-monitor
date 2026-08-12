@@ -108,6 +108,7 @@ from .zone_map import load_zone_map
 
 _LOGGER = logging.getLogger(__name__)
 _NOTIFICATION_QUIET_START = time(hour=22)
+_NOTIFICATION_TIMEOUT_SECONDS = 30
 
 
 class CameraImageNotUsable(RuntimeError):
@@ -966,16 +967,17 @@ class BowlRuntime:
             self.last_cat_photo_delivery = "service_unavailable"
             return
         try:
-            await self.hass.services.async_call(
-                service_parts[0],
-                service_parts[1],
-                {
-                    "message": f"🐈 Cat seen at {self.pet_name}'s food.",
-                    "image_base64": base64.b64encode(jpeg).decode("ascii"),
-                },
-                blocking=True,
-            )
-        except HomeAssistantError as err:
+            async with asyncio.timeout(_NOTIFICATION_TIMEOUT_SECONDS):
+                await self.hass.services.async_call(
+                    service_parts[0],
+                    service_parts[1],
+                    {
+                        "message": f"🐈 Cat seen at {self.pet_name}'s food.",
+                        "image_base64": base64.b64encode(jpeg).decode("ascii"),
+                    },
+                    blocking=True,
+                )
+        except (HomeAssistantError, TimeoutError) as err:
             self.last_cat_photo_delivery = "failed"
             _LOGGER.warning("Cat sighting photo delivery failed: %s", err)
         else:
@@ -1231,13 +1233,14 @@ class BowlRuntime:
             self.last_family_delivery = "service_unavailable"
             return
         try:
-            await self.hass.services.async_call(
-                service_parts[0],
-                service_parts[1],
-                {"message": message[:1500]},
-                blocking=True,
-            )
-        except HomeAssistantError as err:
+            async with asyncio.timeout(_NOTIFICATION_TIMEOUT_SECONDS):
+                await self.hass.services.async_call(
+                    service_parts[0],
+                    service_parts[1],
+                    {"message": message[:1500]},
+                    blocking=True,
+                )
+        except (HomeAssistantError, TimeoutError) as err:
             self.last_family_delivery = "failed"
             _LOGGER.warning("Cat bowl Family-chat delivery failed: %s", err)
         else:
@@ -1362,6 +1365,12 @@ class BowlRuntime:
             self.last_cycle_key = str(loaded.get("last_cycle_key", ""))
             self.last_cycle_status = str(loaded.get("last_cycle_status", "never_run"))
             self.last_cycle_message = str(loaded.get("last_cycle_message", ""))[:1500]
+            if self.last_cycle_status == "checking":
+                self.last_cycle_status = "interrupted"
+                self.last_cycle_message = (
+                    "The previous food check was interrupted by a restart. "
+                    "No feed was automatically retried."
+                )
             self.pending_provider_retry_at = _parse_datetime(
                 loaded.get("pending_provider_retry_at")
             )

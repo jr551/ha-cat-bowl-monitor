@@ -45,6 +45,8 @@ bowls monitored by the integration:
   meaningful bowl-state change; percentage-only fluctuations stay silent.
 - Family-chat text and cat photos are quiet from 22:00 local time until the
   configured first daily check. Bowl checks and guarded feeding continue.
+- Notification service calls are bounded so a slow Family endpoint cannot stall
+  bowl checks or feeder decisions.
 - One-line Family summaries say whether 1R was dispensed and why. After a feed,
   the integration takes a two-minute image and adds **Cat seen** only when the
   AI confidently sees a cat.
