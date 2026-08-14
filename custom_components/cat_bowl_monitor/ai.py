@@ -14,6 +14,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    ASSESSMENT_MAX_TOKENS,
+    COMPARISON_MAX_TOKENS,
     CONF_AI_API_KEY,
     CONF_AI_BASE_URL,
     CONF_AI_MODEL,
@@ -223,7 +225,7 @@ async def async_assess_bowl(
             },
             {"role": "user", "content": content},
         ],
-        "max_tokens": 1000,
+        "max_tokens": ASSESSMENT_MAX_TOKENS,
         "temperature": 0.1,
         "stream": False,
         "user": user_key,
@@ -335,7 +337,7 @@ async def async_compare_consumption(
             },
             {"role": "user", "content": content},
         ],
-        "max_tokens": 220,
+        "max_tokens": COMPARISON_MAX_TOKENS,
         "temperature": 0.1,
         "stream": False,
         "user": user_key,

@@ -269,11 +269,27 @@ def _message_content(message: Any) -> Any:
     return content
 
 
+def _choice_content(choice: Any) -> Any:
+    """Return usable content, rejecting answers truncated by the token limit."""
+    if not isinstance(choice, dict):
+        raise TypeError("Provider choice is not an object")
+    message = choice.get("message")
+    if (
+        isinstance(message, dict)
+        and choice.get("finish_reason") == "length"
+        and not message.get("content")
+    ):
+        raise AssessmentError(
+            "The AI provider ran out of response tokens before answering"
+        )
+    return _message_content(message)
+
+
 def parse_provider_response(body: bytes | str) -> Assessment:
     """Parse one strict OpenAI-compatible chat-completions response."""
     try:
         payload = json.loads(body)
-        content = _message_content(payload["choices"][0]["message"])
+        content = _choice_content(payload["choices"][0])
         if isinstance(content, list):
             content = " ".join(
                 str(item.get("text", "")) for item in content if isinstance(item, dict)
@@ -325,7 +341,7 @@ def parse_consumption_response(body: bytes | str) -> Consumption:
     """Parse a strict earlier-versus-current comparison."""
     try:
         payload = json.loads(body)
-        content = _message_content(payload["choices"][0]["message"])
+        content = _choice_content(payload["choices"][0])
         if isinstance(content, list):
             content = " ".join(
                 str(item.get("text", "")) for item in content if isinstance(item, dict)

@@ -716,13 +716,14 @@ class BowlRuntime:
                     and observation_signature
                     != self.last_family_observation_signature
                 )
-                if should_notify_cycle(
+                notify_wanted = should_notify_cycle(
                     notifications_enabled=self.notifications_enabled,
                     notify_no_action=self.notify_no_action,
                     right_needed=right_needed,
                     left_needed=left_needed,
                     observation_changed=observation_changed,
-                ):
+                )
+                if notify_wanted:
                     await self._async_notify_family(self.last_cycle_message)
                 elif not observation_confirmed:
                     self.last_family_delivery = "suppressed_unconfirmed"
@@ -732,7 +733,11 @@ class BowlRuntime:
                     self.last_family_delivery = "suppressed_unchanged"
                 else:
                     self.last_family_delivery = "suppressed_no_action"
-                if observation_confirmed:
+                quiet_deferred = (
+                    notify_wanted
+                    and self.last_family_delivery == "suppressed_quiet_hours"
+                )
+                if observation_confirmed and not quiet_deferred:
                     self.last_family_observation_signature = observation_signature
                 payload = self._cycle_payload()
                 self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, payload)
@@ -768,7 +773,7 @@ class BowlRuntime:
                     "automatically retried. Please check Home Assistant."
                 )
                 await self._async_notify_family(
-                    self.last_cycle_message, suppress_repeat=True
+                    self.last_cycle_message, suppress_repeat=True, critical=True
                 )
             finally:
                 if self.last_cycle_status not in {
@@ -865,7 +870,9 @@ class BowlRuntime:
             message += "\nCat seen."
         self.last_cycle_message = message
         await self._async_notify_family(
-            message, suppress_repeat=not right_result.startswith("sent")
+            message,
+            suppress_repeat=not right_result.startswith("sent"),
+            critical=True,
         )
         self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
 
@@ -981,6 +988,7 @@ class BowlRuntime:
             self.last_cat_photo_delivery = "failed"
             _LOGGER.warning("Cat sighting photo delivery failed: %s", err)
         else:
+            self.last_cat_photo_at = captured_at
             self.last_cat_photo_delivery = "accepted"
 
     async def _async_capture_fresh_image(self) -> bytes:
@@ -1215,13 +1223,23 @@ class BowlRuntime:
         )
 
     async def _async_notify_family(
-        self, message: str, *, suppress_repeat: bool = False
+        self, message: str, *, suppress_repeat: bool = False, critical: bool = False
     ) -> None:
         if not self.notifications_enabled:
             self.last_family_delivery = "disabled"
             return
         if self._notifications_quiet():
-            self.last_family_delivery = "suppressed_quiet_hours"
+            if critical:
+                # Problems must stay visible overnight without waking the chat.
+                persistent_notification.async_create(
+                    self.hass,
+                    message,
+                    title="Cat Bowl Monitor problem",
+                    notification_id=f"{DOMAIN}_{self.entry.entry_id}_problem",
+                )
+                self.last_family_delivery = "quiet_hours_persistent"
+            else:
+                self.last_family_delivery = "suppressed_quiet_hours"
             return
         if suppress_repeat and message == self.last_notified_message:
             self.last_family_delivery = "suppressed_unchanged"

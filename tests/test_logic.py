@@ -119,6 +119,24 @@ def test_parse_reasoning_channel_when_content_is_empty() -> None:
     assert result.wet.level == "empty"
 
 
+def test_length_truncated_empty_content_is_rejected_clearly() -> None:
+    body = json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "",
+                        "reasoning_content": '{"dry":{"level":"low","fill":20,"conf',
+                    },
+                }
+            ]
+        }
+    ).encode()
+    with pytest.raises(AssessmentError, match="ran out of response tokens"):
+        parse_provider_response(body)
+
+
 def test_invalid_wet_appearance_is_rejected() -> None:
     payload = two_bowl_result()
     payload["wet_appearance"] = "old"

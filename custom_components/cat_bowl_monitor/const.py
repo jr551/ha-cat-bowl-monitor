@@ -65,6 +65,10 @@ MAX_SUMMARY_LENGTH = 500
 MAX_ZONE_MAP_BYTES = 4 * 1024 * 1024
 PROVIDER_TIMEOUT = 90
 PROVIDER_PARSE_ATTEMPTS = 3
+# Reasoning models spend response tokens on a hidden reasoning channel before
+# emitting content; small budgets return an empty answer cut off mid-reasoning.
+ASSESSMENT_MAX_TOKENS = 4000
+COMPARISON_MAX_TOKENS = 2000
 PROVIDER_RETRY_DELAY_SECONDS = 10 * 60
 CAPTURE_TIMEOUT = 20
 MAX_CAMERA_IMAGE_BYTES = 4 * 1024 * 1024
