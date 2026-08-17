@@ -24,9 +24,12 @@
           "bowl_description": "Bowl locations and appearance",
           "zone_map_file": "Overlay map image (optional)",
           "clear_zone_map": "Remove saved overlay map",
-          "ai_api_key": "Direct provider API key (optional)",
-          "ai_base_url": "Direct provider HTTPS base URL (optional)",
-          "ai_model": "Direct provider model (optional)"
+          "ai_api_key": "Primary provider API key (optional)",
+          "ai_base_url": "Primary provider HTTPS base URL (optional)",
+          "ai_model": "Primary provider model (optional)",
+          "fallback_ai_api_key": "Fallback xAI API key (optional)",
+          "fallback_ai_base_url": "Fallback xAI HTTPS base URL (optional)",
+          "fallback_ai_model": "Fallback xAI model (optional)"
         }
       }
     },
@@ -67,9 +70,12 @@
           "bowl_description": "Bowl locations and appearance",
           "zone_map_file": "Overlay map image (optional)",
           "clear_zone_map": "Remove saved overlay map",
-          "ai_api_key": "Direct provider API key (optional)",
-          "ai_base_url": "Direct provider HTTPS base URL (optional)",
-          "ai_model": "Direct provider model (optional)"
+          "ai_api_key": "Primary provider API key (optional)",
+          "ai_base_url": "Primary provider HTTPS base URL (optional)",
+          "ai_model": "Primary provider model (optional)",
+          "fallback_ai_api_key": "Fallback xAI API key (optional)",
+          "fallback_ai_base_url": "Fallback xAI HTTPS base URL (optional)",
+          "fallback_ai_model": "Fallback xAI model (optional)"
         }
       }
     }

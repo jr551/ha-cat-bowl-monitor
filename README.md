@@ -35,7 +35,8 @@ bowls monitored by the integration:
 - An independent overnight interval can replace the normal slots from 22:00
   until the first daily check; a 2-hour interval adds checks at the same
   anchor-aligned times overnight.
-- Direct OpenAI-compatible API settings, or credential reuse from the
+- Direct OpenAI-compatible primary settings, plus an optional xAI Responses
+  fallback, or credential reuse from the
   [UBox Camera](https://github.com/jr551/ha-ubox-camera) integration.
 - Optional primary and secondary feeder actions using a Home Assistant scene,
   script, or button.
@@ -58,9 +59,9 @@ bowls monitored by the integration:
   external feeder schedule from making consumption look artificially low.
 - Bounded post-feed baseline retries recover from camera startup races and
   malformed provider responses without ever retrying a feeder action.
-- Compact structured AI responses are retried with bounded attempts when parsing
-  fails, and unverified actuator calls are reported separately from completed
-  feeds.
+- Provider transport failures can fail over once to a configured xAI Responses
+  provider; if both providers fail, status entities remain visible with the
+  safe-to-display failure reason and feeding remains fail-closed.
 - A malformed scheduled AI assessment receives one delayed retry after 10
   minutes; feeder actions themselves are never automatically retried.
 - Bounded latest, before, after, and baseline images instead of an archive.
@@ -135,11 +136,16 @@ Both times can be changed in the integration options.
 
 You can enter an API key, HTTPS base URL, and model for any compatible
 Chat Completions vision endpoint. The base URL may be either the API root or
-the full `/chat/completions` URL.
+the full `/chat/completions` URL. Alternatively, leave all three primary fields
+blank to reuse the vision provider already configured in UBox Camera; that
+credential is read in memory and is not copied to Cat Bowl Monitor.
 
-Alternatively, leave all three direct-provider fields blank to reuse the
-vision provider already configured in UBox Camera. The credential is read from
-the loaded config entry in memory and is not copied to Cat Bowl Monitor.
+An optional fallback uses xAI's Responses API. Enter its API key,
+`https://api.x.ai/v1`, and a vision-capable model such as `grok-4.6`. It is
+used only when the primary provider cannot complete a request; malformed model
+output remains a failure rather than causing an unsafe feed. The fallback sends
+`store: false`, uses low reasoning effort, and receives only the same bounded
+images and prompt needed for the bowl check.
 
 When configured, the normalized zone-map image is sent with the live camera
 image for both status assessment and consumption comparison. Keep the overlay

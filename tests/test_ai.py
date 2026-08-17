@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 from io import BytesIO
@@ -89,3 +90,80 @@ def test_malformed_assessment_is_classified_after_bounded_attempts(monkeypatch) 
 
     asyncio.run(run_check())
     assert calls == ai.PROVIDER_PARSE_ATTEMPTS
+
+
+def test_xai_responses_payload_and_result_are_normalized(monkeypatch) -> None:
+    ai = _load_ai_module(monkeypatch)
+
+    payload = ai._xai_request(
+        {
+            "messages": [
+                {"role": "system", "content": "Return JSON."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Assess the bowl."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64,abc",
+                                "detail": "low",
+                            },
+                        },
+                    ],
+                },
+            ],
+            "max_tokens": 4000,
+        },
+        "grok-4.6",
+    )
+
+    assert payload["model"] == "grok-4.6"
+    assert payload["max_output_tokens"] == 4000
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["store"] is False
+    assert payload["input"][1]["content"] == [
+        {"type": "input_text", "text": "Assess the bowl."},
+        {
+            "type": "input_image",
+            "image_url": "data:image/jpeg;base64,abc",
+            "detail": "low",
+        },
+    ]
+    normalized = ai._xai_response_as_chat_completion(
+        b'{"output":[{"type":"message","content":'
+        b'[{"type":"output_text","text":"{\\"dry\\":{}}"}]}]}'
+    )
+    assert json.loads(normalized)["choices"][0]["message"]["content"] == '{"dry":{}}'
+
+
+def test_partial_fallback_provider_is_rejected(monkeypatch) -> None:
+    ai = _load_ai_module(monkeypatch)
+
+    with pytest.raises(ai.ProviderError, match="Fallback provider requires"):
+        ai.fallback_provider_settings_from_config({"fallback_ai_api_key": "key"})
+
+
+def test_provider_request_fails_over_after_primary_error(monkeypatch) -> None:
+    ai = _load_ai_module(monkeypatch)
+    primary = ai.ProviderSettings("primary", "https://primary.test", "one", "Primary")
+    fallback = ai.ProviderSettings("fallback", "https://api.x.ai/v1", "two", "Fallback")
+    attempted: list[str] = []
+
+    async def provider_request(_hass, settings, _request):
+        attempted.append(settings.source)
+        if settings is primary:
+            raise ai.ProviderError("HTTP 402")
+        return b'{"choices":[{"message":{"content":"{}"}}]}'
+
+    monkeypatch.setattr(ai, "_async_provider_request", provider_request)
+
+    async def run_request() -> None:
+        body, active = await ai._async_provider_request_with_fallback(
+            _Hass(), primary, fallback, {"messages": [], "max_tokens": 1}
+        )
+        assert body == b'{"choices":[{"message":{"content":"{}"}}]}'
+        assert active is fallback
+
+    asyncio.run(run_request())
+    assert attempted == ["Primary", "Fallback"]

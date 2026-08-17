@@ -32,6 +32,7 @@ from .ai import (
     ProviderResponseError,
     async_assess_bowl,
     async_compare_consumption,
+    fallback_provider_settings_from_config,
     provider_settings_from_config,
 )
 from .camera_source import fetch_bounded_snapshot, private_esphome_snapshot_url
@@ -921,6 +922,7 @@ class BowlRuntime:
             settings,
             self.bowl_description,
             self.zone_map_image,
+            fallback_provider_settings_from_config(self.options),
         )
         captured_at = dt_util.utcnow()
         self.latest_images["latest"] = jpeg
@@ -1104,6 +1106,7 @@ class BowlRuntime:
                 provider_settings_from_config(self.hass, self.options),
                 self.bowl_description,
                 self.zone_map_image,
+                fallback_provider_settings_from_config(self.options),
             )
             self.consumption_from_at = self.baseline_at
             self.consumption_to_at = dt_util.utcnow()

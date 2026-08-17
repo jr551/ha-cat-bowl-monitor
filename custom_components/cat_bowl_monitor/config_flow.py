@@ -8,7 +8,11 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers import selector
 
-from .ai import ProviderError, provider_settings_from_config
+from .ai import (
+    ProviderError,
+    fallback_provider_settings_from_config,
+    provider_settings_from_config,
+)
 from .const import (
     CHECK_INTERVAL_OPTIONS,
     CONF_AFTERNOON_TIME,
@@ -21,6 +25,9 @@ from .const import (
     CONF_CLEAR_ZONE_MAP,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_CONFIRMATION_SAMPLES,
+    CONF_FALLBACK_AI_API_KEY,
+    CONF_FALLBACK_AI_BASE_URL,
+    CONF_FALLBACK_AI_MODEL,
     CONF_FEEDING_SENSOR,
     CONF_LEFT_FEED_ENTITY,
     CONF_LIGHT_ENTITY,
@@ -53,6 +60,9 @@ _OPTIONAL_KEYS = (
     CONF_AI_API_KEY,
     CONF_AI_BASE_URL,
     CONF_AI_MODEL,
+    CONF_FALLBACK_AI_API_KEY,
+    CONF_FALLBACK_AI_BASE_URL,
+    CONF_FALLBACK_AI_MODEL,
 )
 
 
@@ -175,6 +185,9 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(CONF_CLEAR_ZONE_MAP, default=False): bool,
         }
     )
+    _optional_text(fields, CONF_FALLBACK_AI_API_KEY, defaults, "password")
+    _optional_text(fields, CONF_FALLBACK_AI_BASE_URL, defaults, "url")
+    _optional_text(fields, CONF_FALLBACK_AI_MODEL, defaults)
     for key in (CONF_RIGHT_FEED_ENTITY, CONF_LEFT_FEED_ENTITY):
         _optional_entity(
             fields,
@@ -220,6 +233,7 @@ def _validate_entities_and_provider(
         errors[CONF_NOTIFICATION_SERVICE] = "notification_service_not_found"
     try:
         provider_settings_from_config(hass, user_input)
+        fallback_provider_settings_from_config(user_input)
     except ProviderError:
         errors["base"] = "provider_not_configured"
     return errors

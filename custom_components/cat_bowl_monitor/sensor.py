@@ -42,6 +42,11 @@ class BowlStatusSensor(BowlEntity, SensorEntity):
         self._attr_unique_id = f"{runtime.entry.entry_id}_{bowl_name}_status"
 
     @property
+    def available(self) -> bool:
+        """Keep the last provider failure visible when monitoring is blocked."""
+        return True
+
+    @property
     def native_value(self) -> str:
         return self.runtime.bowl(self.bowl_name)["stable_level"]
 
@@ -188,6 +193,11 @@ class AutoFeedSensor(BowlEntity, SensorEntity):
         self._attr_unique_id = f"{runtime.entry.entry_id}_auto_feed"
 
     @property
+    def available(self) -> bool:
+        """Expose the fail-closed reason instead of hiding the status entity."""
+        return True
+
+    @property
     def native_value(self) -> str:
         return self.runtime.last_cycle_status
 
@@ -208,6 +218,7 @@ class AutoFeedSensor(BowlEntity, SensorEntity):
             ),
             "family_delivery": self.runtime.last_family_delivery or None,
             "message": self.runtime.last_cycle_message or None,
+            "last_error": self.runtime.last_error or None,
             "right_feed_entity": self.runtime.right_feed_entity or None,
             "left_feed_entity": self.runtime.left_feed_entity or None,
             "fail_closed": True,

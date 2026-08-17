@@ -19,6 +19,9 @@ from .const import (
     CONF_AI_API_KEY,
     CONF_AI_BASE_URL,
     CONF_AI_MODEL,
+    CONF_FALLBACK_AI_API_KEY,
+    CONF_FALLBACK_AI_BASE_URL,
+    CONF_FALLBACK_AI_MODEL,
     DEFAULT_BOWL_DESCRIPTION,
     MAX_PROVIDER_RESPONSE_BYTES,
     PROVIDER_PARSE_ATTEMPTS,
@@ -153,6 +156,21 @@ def provider_settings_from_config(
         return ProviderSettings(api_key, base_url, model, "Direct configuration")
     return provider_settings_from_ubox(hass)
 
+def fallback_provider_settings_from_config(
+    options: dict[str, Any],
+) -> ProviderSettings | None:
+    """Return an optional complete fallback provider configuration."""
+    api_key = str(options.get(CONF_FALLBACK_AI_API_KEY, "")).strip()
+    base_url = str(options.get(CONF_FALLBACK_AI_BASE_URL, "")).strip()
+    model = str(options.get(CONF_FALLBACK_AI_MODEL, "")).strip()
+    if not any((api_key, base_url, model)):
+        return None
+    if not api_key or not model or not valid_https_url(base_url):
+        raise ProviderError(
+            "Fallback provider requires an API key, HTTPS base URL, and model"
+        )
+    return ProviderSettings(api_key, base_url, model, "Fallback xAI")
+
 
 def _zone_map_content(zone_map_jpeg: bytes | None) -> list[dict[str, Any]]:
     """Build the optional trusted zone-map image content."""
@@ -190,6 +208,7 @@ async def async_assess_bowl(
     settings: ProviderSettings,
     bowl_description: str,
     zone_map_jpeg: bytes | None = None,
+    fallback_settings: ProviderSettings | None = None,
 ) -> tuple[Assessment, str]:
     """Prepare and assess one image."""
     prepared = await hass.async_add_executor_job(prepare_vision_jpeg, jpeg)
@@ -237,9 +256,11 @@ async def async_assess_bowl(
                 "The previous response was invalid. Reassess the image and return "
                 "only the small required JSON object, with no prose or markdown."
             )
-        body = await _async_provider_request(hass, settings, request)
+        body, active_settings = await _async_provider_request_with_fallback(
+            hass, settings, fallback_settings, request
+        )
         try:
-            return parse_provider_response(body), settings.model
+            return parse_provider_response(body), active_settings.model
         except AssessmentError as err:
             last_error = err
     _LOGGER.warning(
@@ -249,13 +270,101 @@ async def async_assess_bowl(
     raise ProviderResponseError(str(last_error)) from last_error
 
 
+async def _async_provider_request_with_fallback(
+    hass: HomeAssistant,
+    primary: ProviderSettings,
+    fallback: ProviderSettings | None,
+    request: dict[str, Any],
+) -> tuple[bytes, ProviderSettings]:
+    """Use the fallback only after the primary provider transport fails."""
+    try:
+        return await _async_provider_request(hass, primary, request), primary
+    except ProviderError as primary_error:
+        if fallback is None:
+            raise
+        _LOGGER.warning(
+            "Primary vision provider failed (%s); trying %s",
+            primary_error,
+            fallback.source,
+        )
+        try:
+            return await _async_provider_request(hass, fallback, request), fallback
+        except ProviderError as fallback_error:
+            raise ProviderError(
+                f"Primary provider failed: {primary_error}; "
+                f"fallback provider failed: {fallback_error}"
+            ) from fallback_error
+
+
+def _is_xai_responses(settings: ProviderSettings) -> bool:
+    """Return whether the provider requires xAI's Responses API."""
+    return urlsplit(settings.base_url).hostname == "api.x.ai"
+
+
+def _xai_request(request: dict[str, Any], model: str) -> dict[str, Any]:
+    """Translate this integration's OpenAI chat payload to xAI Responses."""
+    input_messages: list[dict[str, Any]] = []
+    for message in request["messages"]:
+        content = message["content"]
+        if isinstance(content, str):
+            input_messages.append({"role": message["role"], "content": content})
+            continue
+        converted: list[dict[str, Any]] = []
+        for item in content:
+            if item["type"] == "text":
+                converted.append({"type": "input_text", "text": item["text"]})
+            elif item["type"] == "image_url":
+                image = item["image_url"]
+                converted.append(
+                    {
+                        "type": "input_image",
+                        "image_url": image["url"],
+                        "detail": image.get("detail", "low"),
+                    }
+                )
+        input_messages.append({"role": message["role"], "content": converted})
+    return {
+        "model": model,
+        "input": input_messages,
+        "max_output_tokens": request["max_tokens"],
+        "reasoning": {"effort": "low"},
+        "store": False,
+        "stream": False,
+    }
+
+
+def _xai_response_as_chat_completion(body: bytes) -> bytes:
+    """Normalize an xAI Responses result for the strict existing parsers."""
+    try:
+        payload = json.loads(body)
+        text = "".join(
+            item["text"]
+            for output in payload["output"]
+            if output.get("type") == "message"
+            for item in output.get("content", [])
+            if item.get("type") == "output_text" and isinstance(item.get("text"), str)
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as err:
+        raise ProviderResponseError("xAI returned no usable output text") from err
+    if not text:
+        raise ProviderResponseError("xAI returned no usable output text")
+    return json.dumps({"choices": [{"message": {"content": text}}]}).encode()
+
+
 async def _async_provider_request(
     hass: HomeAssistant,
     settings: ProviderSettings,
     request: dict[str, Any],
 ) -> bytes:
-    """Submit one bounded OpenAI-compatible request."""
-    endpoint = chat_completions_url(settings.base_url)
+    """Submit one bounded provider request."""
+    xai_responses = _is_xai_responses(settings)
+    endpoint = responses_url(settings.base_url) if xai_responses else chat_completions_url(
+        settings.base_url
+    )
+    payload = _xai_request(request, settings.model) if xai_responses else {
+        **request,
+        "model": settings.model,
+    }
     headers = {
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
@@ -269,7 +378,7 @@ async def _async_provider_request(
             async with async_get_clientsession(hass).post(
                 endpoint,
                 headers=headers,
-                json=request,
+                json=payload,
                 allow_redirects=False,
             ) as response:
                 body = await response.content.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
@@ -286,7 +395,7 @@ async def _async_provider_request(
     except Exception as err:
         raise ProviderError("Could not reach the AI provider") from err
 
-    return body
+    return _xai_response_as_chat_completion(body) if xai_responses else body
 
 
 async def async_compare_consumption(
@@ -297,6 +406,7 @@ async def async_compare_consumption(
     settings: ProviderSettings,
     bowl_description: str,
     zone_map_jpeg: bytes | None = None,
+    fallback_settings: ProviderSettings | None = None,
 ) -> tuple[Consumption, str]:
     """Compare two images and estimate consumption."""
     earlier, current = await asyncio.gather(
@@ -342,9 +452,11 @@ async def async_compare_consumption(
         "stream": False,
         "user": user_key,
     }
-    body = await _async_provider_request(hass, settings, request)
+    body, active_settings = await _async_provider_request_with_fallback(
+        hass, settings, fallback_settings, request
+    )
     try:
-        return parse_consumption_response(body), settings.model
+        return parse_consumption_response(body), active_settings.model
     except AssessmentError as err:
         _LOGGER.warning(
             "AI provider returned malformed comparison JSON; content was: %s",
@@ -361,6 +473,17 @@ def chat_completions_url(base_url: str) -> str:
     path = parsed.path.rstrip("/")
     if not path.endswith("/chat/completions"):
         path += "/chat/completions"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def responses_url(base_url: str) -> str:
+    """Build the xAI Responses endpoint from a provider base URL."""
+    if not valid_https_url(base_url):
+        raise ProviderError("The AI provider base URL is invalid")
+    parsed = urlsplit(base_url.strip())
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/responses"):
+        path += "/responses"
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
