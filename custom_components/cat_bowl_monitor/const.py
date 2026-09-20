@@ -10,6 +10,7 @@ CONF_CONFIDENCE_THRESHOLD = "confidence_threshold"
 CONF_NOTIFICATIONS = "notifications"
 CONF_NOTIFY_NO_ACTION = "notify_no_action"
 CONF_NOTIFICATION_SERVICE = "notification_service"
+CONF_PRE_FEED_PHOTO = "pre_feed_photo"
 CONF_RIGHT_FEED_ENTITY = "right_feed_entity"
 CONF_LEFT_FEED_ENTITY = "left_feed_entity"
 CONF_FEEDING_SENSOR = "feeding_sensor"
@@ -34,6 +35,7 @@ DEFAULT_CONFIRMATION_SAMPLES = 2
 DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 DEFAULT_NOTIFICATIONS = False
 DEFAULT_NOTIFY_NO_ACTION = False
+DEFAULT_PRE_FEED_PHOTO = True
 DEFAULT_MORNING_TIME = "05:00"
 DEFAULT_AFTERNOON_TIME = "16:00"
 DEFAULT_CHECK_INTERVAL_HOURS = 0
@@ -66,7 +68,7 @@ STORE_VERSION = 1
 MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024
 MAX_SUMMARY_LENGTH = 500
 MAX_ZONE_MAP_BYTES = 4 * 1024 * 1024
-PROVIDER_TIMEOUT = 90
+PROVIDER_TIMEOUT = 180
 PROVIDER_PARSE_ATTEMPTS = 3
 # Reasoning models spend response tokens on a hidden reasoning channel before
 # emitting content; small budgets return an empty answer cut off mid-reasoning.

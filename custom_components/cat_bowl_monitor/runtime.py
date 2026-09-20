@@ -54,6 +54,7 @@ from .const import (
     CONF_NOTIFICATIONS,
     CONF_NOTIFY_NO_ACTION,
     CONF_PET_NAME,
+    CONF_PRE_FEED_PHOTO,
     CONF_RIGHT_FEED_ENTITY,
     CONFIRMATION_DELAY_SECONDS,
     DEFAULT_AFTERNOON_TIME,
@@ -66,6 +67,7 @@ from .const import (
     DEFAULT_NOTIFICATIONS,
     DEFAULT_NOTIFY_NO_ACTION,
     DEFAULT_PET_NAME,
+    DEFAULT_PRE_FEED_PHOTO,
     DOMAIN,
     EVENT_BASELINE_RESET,
     EVENT_BECAME_EMPTY,
@@ -88,6 +90,7 @@ from .image import (
     camera_image_is_decodable,
     camera_image_is_usable,
     camera_luminance_range,
+    prepare_vision_jpeg,
 )
 from .logic import (
     Assessment,
@@ -149,6 +152,7 @@ class BowlRuntime:
         self.pending_provider_retry_at: datetime | None = None
         self._feed_baseline_task: asyncio.Task[None] | None = None
         self._internal_feed_requests = 0
+        self._pre_feed_photo_cycle_key = ""
         self._store = Store(hass, STORE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.latest_images: dict[str, bytes | None] = {
             "latest": None,
@@ -219,6 +223,10 @@ class BowlRuntime:
     @property
     def notify_no_action(self) -> bool:
         return bool(self.options.get(CONF_NOTIFY_NO_ACTION, DEFAULT_NOTIFY_NO_ACTION))
+
+    @property
+    def pre_feed_photo(self) -> bool:
+        return bool(self.options.get(CONF_PRE_FEED_PHOTO, DEFAULT_PRE_FEED_PHOTO))
 
     @property
     def right_feed_entity(self) -> str:
@@ -380,6 +388,14 @@ class BowlRuntime:
         self.last_feeder_completion_at = completed_at
         if self._internal_feed_requests:
             return
+        # A dispense that did NOT come through our own feed path (manual,
+        # Tuya schedule, physical button) got no pre-feed photo — send one
+        # now so the family sees the bowl state at feed time.
+        self.hass.async_create_background_task(
+            self._async_send_post_dispense_photo(completed_at),
+            name=f"{DOMAIN}_{self.entry.entry_id}_post_dispense_photo",
+            eager_start=True,
+        )
         self._schedule_feed_baseline(completed_at)
 
     @callback
@@ -1178,6 +1194,10 @@ class BowlRuntime:
         )
         self._internal_feed_requests += 1
         try:
+            # Photo of the bowl before dispensing. Fail-open by design: the
+            # helper swallows its own errors so a broken camera or chat bridge
+            # can never block a feed.
+            await self._async_send_pre_feed_photo()
             # Fire an event before the call; the event plus persisted cycle key
             # provide an audit trail while retries remain forbidden.
             self.hass.bus.async_fire(
@@ -1213,6 +1233,93 @@ class BowlRuntime:
             self._internal_feed_requests = max(0, self._internal_feed_requests - 1)
             if remove is not None:
                 remove()
+
+    async def _async_send_pre_feed_photo(self) -> None:
+        """Send one bowl photo to the family chat before a feed dispenses.
+
+        Fail-open: every failure is logged and swallowed so a broken camera
+        or notification path can never block a feed. At most one photo is
+        sent per feed cycle, even when both bowls dispense.
+        """
+        try:
+            if not self.pre_feed_photo:
+                return
+            if (
+                self.last_cycle_key
+                and self._pre_feed_photo_cycle_key == self.last_cycle_key
+            ):
+                return
+            self._pre_feed_photo_cycle_key = self.last_cycle_key
+            service_parts = self.notification_service.split(".", 1)
+            if len(service_parts) != 2 or not self.hass.services.has_service(
+                service_parts[0], service_parts[1]
+            ):
+                _LOGGER.warning(
+                    "Pre-feed photo skipped: notification service %s unavailable",
+                    self.notification_service or "(unset)",
+                )
+                return
+            jpeg = await self._async_capture_fresh_image()
+            prepared = await self.hass.async_add_executor_job(
+                prepare_vision_jpeg, jpeg
+            )
+            caption = (
+                f"🍽️ {dt_util.now().strftime('%H:%M')} {self.pet_name}: "
+                "bowl empty — auto-feeding now"
+            )
+            async with asyncio.timeout(_NOTIFICATION_TIMEOUT_SECONDS):
+                await self.hass.services.async_call(
+                    service_parts[0],
+                    service_parts[1],
+                    {
+                        "message": caption,
+                        "image_base64": base64.b64encode(prepared).decode("ascii"),
+                    },
+                    blocking=True,
+                )
+        except Exception as err:  # noqa: BLE001 - feeding must never be blocked
+            _LOGGER.warning("Pre-feed bowl photo failed: %s", err)
+    async def _async_send_post_dispense_photo(self, completed_at: datetime) -> None:
+        """Send a bowl photo after a dispense that bypassed the AI feed path.
+
+        Triggered by the feeding sensor completing while
+        ``_internal_feed_requests`` is zero — i.e. a Tuya-scheduled, manual,
+        or physical-button dispense. Those never went through
+        ``_async_request_feed`` so they got no pre-feed photo. Fail-open and
+        quiet-hours-aware like the rest of the notification path.
+        """
+        try:
+            if not self.notifications_enabled:
+                return
+            if self._notifications_quiet():
+                self.last_cat_photo_delivery = "suppressed_quiet_hours"
+                return
+            service_parts = self.notification_service.split(".", 1)
+            if len(service_parts) != 2 or not self.hass.services.has_service(
+                service_parts[0], service_parts[1]
+            ):
+                return
+            jpeg = await self._async_capture_fresh_image()
+            prepared = await self.hass.async_add_executor_job(
+                prepare_vision_jpeg, jpeg
+            )
+            caption = (
+                f"🍽️ {dt_util.as_local(completed_at).strftime('%H:%M')} "
+                f"{self.pet_name}: fed — bowl at dispense"
+            )
+            async with asyncio.timeout(_NOTIFICATION_TIMEOUT_SECONDS):
+                await self.hass.services.async_call(
+                    service_parts[0],
+                    service_parts[1],
+                    {
+                        "message": caption,
+                        "image_base64": base64.b64encode(prepared).decode("ascii"),
+                    },
+                    blocking=True,
+                )
+        except Exception as err:  # noqa: BLE001 - photo must never break feeding
+            _LOGGER.warning("Post-dispense bowl photo failed: %s", err)
+
 
     def _notifications_quiet(self) -> bool:
         local_time = dt_util.as_local(dt_util.utcnow()).time()
@@ -1280,7 +1387,7 @@ class BowlRuntime:
         fed = right_result.startswith("sent") or left_result.startswith("sent")
         if right_needed:
             if right_result == "sent_and_completed":
-                message = f"🐾 {self.pet_name}: fed 1R — dry bowl was empty."
+                message = f"🤖🐾 {self.pet_name}: fed 1R — dry bowl was empty."
             elif right_result.startswith("sent"):
                 message = (
                     f"⚠️ {self.pet_name}: sent 1R, but feeder completion "
