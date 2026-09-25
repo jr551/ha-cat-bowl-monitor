@@ -894,6 +894,20 @@ class BowlRuntime:
         self.hass.bus.async_fire(EVENT_SCHEDULED_CYCLE, self._cycle_payload())
 
     async def _async_capture_assess(self, image_slot: str) -> tuple[bytes, Assessment]:
+        """Capture and assess, retrying malformed model output once.
+
+        A truncated/empty/malformed model response is retried a single time
+        with a newly captured frame; a second malformed response propagates
+        for the guarded fail-closed handling.
+        """
+        try:
+            return await self._async_capture_assess_once(image_slot)
+        except ProviderResponseError:
+            return await self._async_capture_assess_once(image_slot)
+
+    async def _async_capture_assess_once(
+        self, image_slot: str
+    ) -> tuple[bytes, Assessment]:
         light_state = (
             self.hass.states.get(self.light_entity) if self.light_entity else None
         )
@@ -1114,16 +1128,23 @@ class BowlRuntime:
             self.consumption_baseline_reason = ""
             return
         try:
-            self.consumption, self.last_model = await async_compare_consumption(
-                self.hass,
-                baseline,
-                current_jpeg,
-                self._user_key,
-                provider_settings_from_config(self.hass, self.options),
-                self.bowl_description,
-                self.zone_map_image,
-                fallback_provider_settings_from_config(self.options),
-            )
+            for attempt in range(2):
+                try:
+                    self.consumption, self.last_model = await async_compare_consumption(
+                        self.hass,
+                        baseline,
+                        current_jpeg,
+                        self._user_key,
+                        provider_settings_from_config(self.hass, self.options),
+                        self.bowl_description,
+                        self.zone_map_image,
+                        fallback_provider_settings_from_config(self.options),
+                    )
+                    break
+                except ProviderResponseError:
+                    if attempt:
+                        raise
+                    current_jpeg = await self._async_capture_fresh_image()
             self.consumption_from_at = self.baseline_at
             self.consumption_to_at = dt_util.utcnow()
             self.consumption_baseline_reason = self.baseline_reason
@@ -1433,7 +1454,11 @@ class BowlRuntime:
     async def _async_record_failure(self, error: Exception | str) -> None:
         self.consecutive_failures += 1
         self.last_error = " ".join(str(error).split())[:255]
-        if self.consecutive_failures == 1 or self.consecutive_failures % 6 == 0:
+        if (
+            isinstance(error, ProviderResponseError)
+            or self.consecutive_failures == 1
+            or self.consecutive_failures % 6 == 0
+        ):
             _LOGGER.warning(
                 "Cat bowl check failed (%s consecutive): %s",
                 self.consecutive_failures,

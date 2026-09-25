@@ -105,20 +105,6 @@ class ProviderResponseError(ProviderError):
 _LOGGER = logging.getLogger(__name__)
 
 
-def _malformed_content(body: bytes) -> str:
-    """Extract the model content from a failed response for diagnostics."""
-    try:
-        payload = json.loads(body)
-        content = payload["choices"][0]["message"].get("content")
-    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
-        return ""
-    if isinstance(content, list):
-        content = " ".join(
-            str(item.get("text", "")) for item in content if isinstance(item, dict)
-        )
-    return str(content or "")
-
-
 @dataclass(frozen=True, slots=True)
 class ProviderSettings:
     """Validated vision-provider settings."""
@@ -263,10 +249,6 @@ async def async_assess_bowl(
             return parse_provider_response(body), active_settings.model
         except AssessmentError as err:
             last_error = err
-    _LOGGER.warning(
-        "AI provider returned malformed bowl JSON; content was: %s",
-        _malformed_content(body)[:400],
-    )
     raise ProviderResponseError(str(last_error)) from last_error
 
 
@@ -458,10 +440,6 @@ async def async_compare_consumption(
     try:
         return parse_consumption_response(body), active_settings.model
     except AssessmentError as err:
-        _LOGGER.warning(
-            "AI provider returned malformed comparison JSON; content was: %s",
-            _malformed_content(body)[:400],
-        )
         raise ProviderResponseError(str(err)) from err
 
 
